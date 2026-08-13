@@ -146,6 +146,16 @@ class AudioReceiver:
         self.lock = threading.Lock()
         self.breathing_detector = BreathingDetector(SAMPLE_RATE) if BREATHING_ENABLE else None
 
+        # Persistent MP3 encoder to avoid reset artifacts between segments
+        self._mp3_encoder = None
+        if HAS_LAME:
+            encoder = lameenc.Encoder()
+            encoder.set_bit_rate(MP3_BITRATE)
+            encoder.set_in_sample_rate(SAMPLE_RATE)
+            encoder.set_channels(CHANNELS)
+            encoder.set_quality(2)
+            self._mp3_encoder = encoder
+
         # Dynamic segment config
         self.segment_duration_sec = SEGMENT_DURATION_SEC
         self.overlap_duration_sec = OVERLAP_DURATION_SEC
@@ -160,13 +170,10 @@ class AudioReceiver:
         """Encode 16-bit mono PCM to MP3 bytes."""
         if not HAS_LAME:
             raise RuntimeError("lameenc not installed. Run: pip install lameenc")
-        encoder = lameenc.Encoder()
-        encoder.set_bit_rate(MP3_BITRATE)
-        encoder.set_in_sample_rate(SAMPLE_RATE)
-        encoder.set_channels(CHANNELS)
-        encoder.set_quality(2)
-        mp3 = encoder.encode(bytes(pcm_data))
-        mp3 += encoder.flush()
+        if self._mp3_encoder is None:
+            raise RuntimeError("MP3 encoder not initialized")
+        mp3 = self._mp3_encoder.encode(bytes(pcm_data))
+        mp3 += self._mp3_encoder.flush()
         return mp3
 
     def _save_segment(self, pcm_data):
