@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- SRP Theme Pack color mapping -->
+    <color name="srp_bg">#0f0a18</color>
+    <color name="srp_surface">#1a1230</color>
+    <color name="srp_text">#f3f3f7</color>
+    <color name="srp_text_muted">#c8c9d4</color>
+    <color name="srp_primary">#12f012</color>
+    <color name="srp_primary_contrast">#041105</color>
+    <color name="srp_secondary">#7a2fff</color>
+    <color name="srp_accent">#00d1ff</color>
+    <color name="srp_border">#3d2d61</color>
+
+    <!-- Derived / compatibility -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

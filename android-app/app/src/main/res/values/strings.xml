@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Audio Streamer</string>
+    <string name="streaming">Streaming...</string>
+    <string name="idle">Idle</string>
+    <string name="start">Start Streaming</string>
+    <string name="stop">Stop Streaming</string>
+    <string name="channel_id">audio_streamer_channel</string>
+    <string name="notification_title">Audio Streamer</string>
+    <string name="notification_text">Streaming audio to server</string>
+</resources>

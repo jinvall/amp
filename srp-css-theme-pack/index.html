@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en" data-theme="srp-dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>SRP Theme Pack Preview</title>
+    <link rel="stylesheet" href="./css/srp-theme.css" />
+  </head>
+  <body class="srp-background">
+    <header class="srp-topbar">
+      <div class="srp-brand">
+        <img class="srp-brand-logo" src="./assets/logo-primary.svg" alt="SRP logo" />
+        <p class="srp-brand-title">SRP Theme Pack</p>
+        <span class="srp-badge">v1.0.0</span>
+      </div>
+      <button class="srp-btn srp-btn-secondary" id="toggle-theme">Toggle Theme</button>
+    </header>
+
+    <main class="srp-container">
+      <section class="srp-card">
+        <h1 style="margin-top:0">Drop-in Branding Theme</h1>
+        <p>
+          This preview demonstrates your generated SRP CSS theme based on the asset pack.
+        </p>
+        <p class="srp-status-info">Info text sample</p>
+        <p class="srp-status-success">Success text sample</p>
+        <p class="srp-status-warning">Warning text sample</p>
+        <p class="srp-status-danger">Danger text sample</p>
+
+        <div style="display:flex; gap:0.75rem; flex-wrap:wrap; margin:1rem 0;">
+          <button class="srp-btn srp-btn-primary">Primary Action</button>
+          <button class="srp-btn srp-btn-secondary">Secondary</button>
+        </div>
+
+        <label for="demo-input">Input</label>
+        <input id="demo-input" class="srp-input" placeholder="Type here" />
+      </section>
+    </main>
+
+    <script src="./js/srp-theme.js"></script>
+    <script>
+      SRPTheme.initTheme("srp-dark");
+      document.getElementById("toggle-theme").addEventListener("click", () => {
+        const mode = SRPTheme.toggleTheme();
+        console.debug("[SRP_THEME_PREVIEW] toggled to", mode);
+      });
+    </script>
+  </body>
+</html>

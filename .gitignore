@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+env.bak/
+venv.bak/
+
+# Android
+android-app/app/build/
+android-app/.gradle/
+android-app/local.properties
+*.apk
+*.ap_
+*.aab
+
+# Audio segments
+server/audio_segments/
+*.mp3
+*.mp4
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+/tmp/receiver.log
+
+# Local config
+local-config.properties
+local-config.json
+.env
+*.env

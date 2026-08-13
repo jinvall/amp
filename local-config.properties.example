@@ -1,0 +1,4 @@
+# Local configuration - DO NOT COMMIT
+# Copy this file to local-config.properties and fill in your values
+#server.ip=YOUR_SERVER_IP
+#server.port=8080

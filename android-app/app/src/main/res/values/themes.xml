@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.SRP" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/srp_primary</item>
+        <item name="colorPrimaryVariant">@color/srp_primary_contrast</item>
+        <item name="colorOnPrimary">@color/srp_primary_contrast</item>
+        <item name="colorSecondary">@color/srp_secondary</item>
+        <item name="colorOnSecondary">@color/srp_text</item>
+        <item name="colorAccent">@color/srp_accent</item>
+
+        <item name="android:colorBackground">@color/srp_bg</item>
+        <item name="android:statusBarColor">@color/srp_surface</item>
+        <item name="android:navigationBarColor">@color/srp_bg</item>
+
+        <item name="colorSurface">@color/srp_surface</item>
+        <item name="colorOnSurface">@color/srp_text</item>
+        <item name="colorOnSurfaceVariant">@color/srp_text_muted</item>
+
+        <item name="android:textColorPrimary">@color/srp_text</item>
+        <item name="android:textColorSecondary">@color/srp_text_muted</item>
+        <item name="android:editTextColor">@color/srp_text</item>
+        <item name="android:textColorHint">@color/srp_text_muted</item>
+
+        <item name="colorControlNormal">@color/srp_text_muted</item>
+        <item name="colorControlActivated">@color/srp_primary</item>
+        <item name="colorControlHighlight">@color/srp_accent</item>
+
+        <item name="android:windowBackground">@color/srp_bg</item>
+        <item name="android:colorButtonNormal">@color/srp_surface</item>
+        <item name="android:colorEdgeEffect">@color/srp_primary</item>
+    </style>
+</resources>
