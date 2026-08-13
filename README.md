@@ -68,7 +68,7 @@ python3 audio_receiver.py --host 0.0.0.0 --port 8080 --output-dir ./audio_segmen
 
 - **Duration**: 5 minutes per segment
 - **Overlap**: 5 seconds between consecutive segments
-- **Format**: MP3 (128 kbps CBR)
+- **Format**: WAV (44.1 kHz, 16-bit mono PCM)
 - **Storage policy**: FIFO; oldest segments deleted when total exceeds 1 hour
 - **Storage path**: `audio_segments/` (relative to receiver working directory)
 
@@ -133,7 +133,7 @@ The app theme is `Theme.SRP`, applied via `AndroidManifest.xml`.
 
 - The first segment has no leading overlap. Subsequent segments include the final 5 seconds of the previous segment.
 - Total stored audio is approximately 1 hour of unique content (12 segments × ~5 min).
-- The Android app sends raw PCM; MP3 encoding is performed on Silver to reduce mobile CPU/battery usage.
+- The Android app sends raw PCM; segments are saved as WAV on Silver.
 
 ## Breathing Detection
 

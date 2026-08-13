@@ -14,6 +14,7 @@ import os
 import sys
 import time
 import struct
+import wave
 import queue as queue_module
 from datetime import datetime
 from collections import deque
@@ -50,7 +51,6 @@ STEP_BYTES = STEP_SEC * BYTES_PER_SECOND                   # 26,049,000
 
 MAX_STORAGE_SECONDS = 60 * 60  # 1 hour
 OUTPUT_DIR = 'audio_segments'
-MP3_BITRATE = 128  # kbps
 
 # Breathing detection config
 BREATHING_ENABLE = True
@@ -146,15 +146,9 @@ class AudioReceiver:
         self.lock = threading.Lock()
         self.breathing_detector = BreathingDetector(SAMPLE_RATE) if BREATHING_ENABLE else None
 
-        # Persistent MP3 encoder to avoid reset artifacts between segments
-        self._mp3_encoder = None
-        if HAS_LAME:
-            encoder = lameenc.Encoder()
-            encoder.set_bit_rate(MP3_BITRATE)
-            encoder.set_in_sample_rate(SAMPLE_RATE)
-            encoder.set_channels(CHANNELS)
-            encoder.set_quality(2)
-            self._mp3_encoder = encoder
+        # WAV segment config
+        self._wav_output_dir = OUTPUT_DIR
+        os.makedirs(self._wav_output_dir, exist_ok=True)
 
         # Dynamic segment config
         self.segment_duration_sec = SEGMENT_DURATION_SEC
@@ -166,29 +160,21 @@ class AudioReceiver:
         self.segment_bytes = self.segment_duration_sec * BYTES_PER_SECOND
         self.step_bytes = self.step_sec * BYTES_PER_SECOND
 
-    def _encode_mp3(self, pcm_data):
-        """Encode 16-bit mono PCM to MP3 bytes."""
-        if not HAS_LAME:
-            raise RuntimeError("lameenc not installed. Run: pip install lameenc")
-        if self._mp3_encoder is None:
-            raise RuntimeError("MP3 encoder not initialized")
-        mp3 = self._mp3_encoder.encode(bytes(pcm_data))
-        mp3 += self._mp3_encoder.flush()
-        return mp3
-
     def _save_segment(self, pcm_data):
-        """Encode and save a segment."""
+        """Save segment as WAV."""
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"segment_{ts}_{self.segment_index:04d}.mp3"
-        filepath = os.path.join(self.output_dir, filename)
+        filename = f"segment_{ts}_{self.segment_index:04d}.wav"
+        filepath = os.path.join(self._wav_output_dir, filename)
 
         try:
-            mp3_data = self._encode_mp3(pcm_data)
-            with open(filepath, 'wb') as f:
-                f.write(mp3_data)
+            with wave.open(filepath, 'wb') as wf:
+                wf.setnchannels(CHANNELS)
+                wf.setsampwidth(SAMPLE_WIDTH)
+                wf.setframerate(SAMPLE_RATE)
+                wf.writeframes(bytes(pcm_data))
             self.storage.add_segment(filepath, self.segment_duration_sec)
             print(f"[{datetime.now().isoformat()}] Saved: {filename} "
-                  f"({len(mp3_data)} bytes, {self.segment_duration_sec}s)")
+                  f"({len(pcm_data)} bytes, {self.segment_duration_sec}s)")
             self.segment_index += 1
         except Exception as e:
             print(f"Failed to save segment: {e}")
