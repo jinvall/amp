@@ -199,15 +199,6 @@ class AudioReceiver:
             self.ring_buffer.extend(data)
             self.bytes_since_last_segment += len(data)
 
-            # RMS in logging
-            rms_in = self._compute_rms(data)
-            print(f"[{datetime.now().isoformat()}] RMS in={rms_in:.1f}, len={len(data)}")
-
-            print(f"[{datetime.now().isoformat()}] Received {len(data)} bytes, "
-                  f"ring_buffer={len(self.ring_buffer)}, "
-                  f"bytes_since_last_segment={self.bytes_since_last_segment}, "
-                  f"STEP_BYTES={self.step_bytes}")
-
             # Breathing detection
             if self.breathing_detector is not None:
                 detections = self.breathing_detector.feed(data)
@@ -224,15 +215,10 @@ class AudioReceiver:
             while self.bytes_since_last_segment >= self.step_bytes:
                 if len(self.ring_buffer) >= self.segment_bytes:
                     segment_pcm = bytes(self.ring_buffer[-self.segment_bytes:])
-                    print(f"[{datetime.now().isoformat()}] Saving segment: "
-                          f"ring_buffer={len(self.ring_buffer)}, "
-                          f"segment_pcm={len(segment_pcm)} bytes")
                     self._save_segment(segment_pcm)
                     self.bytes_since_last_segment -= self.step_bytes
                 else:
                     # Not enough buffered yet (shouldn't happen in steady state)
-                    print(f"[{datetime.now().isoformat()}] Not enough data for segment: "
-                          f"ring_buffer={len(self.ring_buffer)}, need {self.segment_bytes}")
                     break
 
     def _handle_client(self, conn, addr):

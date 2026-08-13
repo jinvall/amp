@@ -131,7 +131,7 @@ class AudioStreamerService : Service() {
         val audioFormat = AudioFormat.ENCODING_PCM_16BIT
 
         val minBufSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-        val bufferSize = max(minBufSize, 4096)
+        val bufferSize = max(minBufSize, 16384)
 
         // Try multiple audio sources to find one that works
         val sources = arrayOf(
@@ -208,31 +208,34 @@ class AudioStreamerService : Service() {
         android.util.Log.d("AudioStreamer", "Recording started")
 
         streamThread = Thread {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
             val buffer = ByteArray(bufferSize)
-            val out = socket?.getOutputStream()
+            val socketOutputStream = socket?.getOutputStream()
+            val bufferedOut = socketOutputStream?.let { java.io.BufferedOutputStream(it, 65536) }
             var chunks = 0
             var totalBytes = 0
             while (isStreaming && audioRecord != null) {
                 val read = audioRecord!!.read(buffer, 0, buffer.size)
-                if (read > 0 && out != null) {
-                    val rmsIn = computeRms(buffer, read)
+                if (read > 0 && bufferedOut != null) {
                     val amplified = amplify(buffer, read, amplification)
-                    val rmsOut = computeRms(amplified, amplified.size)
-                    val rmsDb = if (rmsOut > 0) 20 * log10(rmsOut / 32768.0) else -60.0
-                    out.write(amplified)
-                    out.flush()
+                    bufferedOut.write(amplified, 0, amplified.size)
                     bytesSent += amplified.size
                     totalBytes += amplified.size
                     chunks++
-                    lastRmsIn = rmsIn
-                    lastRmsOut = rmsOut
-                    lastRmsDb = rmsDb
                     if (chunks % 100 == 0) {
+                        lastRmsIn = computeRms(buffer, read)
+                        lastRmsOut = computeRms(amplified, amplified.size)
+                        lastRmsDb = if (lastRmsOut > 0) 20 * log10(lastRmsOut / 32768.0) else -60.0
                         android.util.Log.d("AudioStreamer", "Sent $totalBytes bytes in $chunks chunks")
                     }
                 } else if (read < 0) {
                     android.util.Log.e("AudioStreamer", "AudioRecord read error: $read")
                 }
+            }
+            try {
+                bufferedOut?.flush()
+            } catch (e: Exception) {
+                android.util.Log.e("AudioStreamer", "Flush error", e)
             }
             android.util.Log.d("AudioStreamer", "Streaming loop ended. Total: $totalBytes bytes in $chunks chunks")
         }.also { it.start() }
