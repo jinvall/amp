@@ -227,10 +227,10 @@ class AudioStreamerService : Service() {
                     bytesSent += amplifiedLen
                     totalBytes += amplifiedLen
                     chunks++
+                    lastRmsIn = computeRms(buffer, read)
+                    lastRmsOut = computeRms(amplifiedBuffer, amplifiedLen)
+                    lastRmsDb = if (lastRmsOut > 0) 20 * log10(lastRmsOut / 32768.0) else -60.0
                     if (chunks % 200 == 0) {
-                        lastRmsIn = computeRms(buffer, read)
-                        lastRmsOut = computeRms(amplifiedBuffer, amplifiedLen)
-                        lastRmsDb = if (lastRmsOut > 0) 20 * log10(lastRmsOut / 32768.0) else -60.0
                         val deltaChunks = chunks - lastDiagnosticChunks
                         val deltaBytes = totalBytes - lastDiagnosticBytes
                         android.util.Log.d("AudioStreamer", "Chunk=$read, amplified=$amplifiedLen, "

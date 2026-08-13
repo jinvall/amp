@@ -144,6 +144,13 @@ class MainActivity : AppCompatActivity() {
         binding.tvRmsIn.text = "In: ${"%.0f".format(rmsIn)}"
         binding.tvRmsOut.text = "Out: ${"%.0f".format(rmsOut)}"
         binding.tvRmsDb.text = "dB: ${"%.1f".format(rmsDb)}"
+
+        val bytesSent = if (bound && streamerService?.isCurrentlyStreaming == true) {
+            streamerService?.bytesSent ?: 0
+        } else {
+            0
+        }
+        binding.tvBytes.text = "Bytes sent: $bytesSent"
     }
 
     private fun startStreaming() {
