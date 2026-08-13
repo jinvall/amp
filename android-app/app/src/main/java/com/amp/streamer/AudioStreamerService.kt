@@ -131,7 +131,7 @@ class AudioStreamerService : Service() {
         val audioFormat = AudioFormat.ENCODING_PCM_16BIT
 
         val minBufSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-        val bufferSize = max(minBufSize, 16384)
+        val audioRecordBufferSize = max(minBufSize, 65536)
 
         // Try multiple audio sources to find one that works
         val sources = arrayOf(
@@ -146,11 +146,11 @@ class AudioStreamerService : Service() {
         for (source in sources) {
             try {
                 android.util.Log.d("AudioStreamer", "Trying audio source: $source")
-                val testRecord = AudioRecord(source, sampleRate, channelConfig, audioFormat, bufferSize)
+                val testRecord = AudioRecord(source, sampleRate, channelConfig, audioFormat, audioRecordBufferSize)
                 if (testRecord.state == AudioRecord.STATE_INITIALIZED) {
                     android.util.Log.d("AudioStreamer", "Audio source $source initialized successfully")
                     testRecord.release()
-                    audioRecord = AudioRecord(source, sampleRate, channelConfig, audioFormat, bufferSize)
+                    audioRecord = AudioRecord(source, sampleRate, channelConfig, audioFormat, audioRecordBufferSize)
                     break
                 } else {
                     android.util.Log.w("AudioStreamer", "Audio source $source failed to initialize")
@@ -172,10 +172,12 @@ class AudioStreamerService : Service() {
                 android.util.Log.d("AudioStreamer", "Connecting to $serverIp:$serverPort...")
                 val newSocket = java.net.Socket()
                 newSocket.connect(java.net.InetSocketAddress(serverIp, serverPort), 5000)
+                newSocket.tcpNoDelay = true
+                newSocket.sendBufferSize = 131072
                 socket = newSocket
                 android.util.Log.d("AudioStreamer", "Connected to $serverIp:$serverPort")
                 sendConfig(newSocket)
-                startRecordingLoop(bufferSize)
+                startRecordingLoop(audioRecordBufferSize)
             } catch (e: Exception) {
                 android.util.Log.e("AudioStreamer", "Connection failed", e)
                 e.printStackTrace()
@@ -210,23 +212,31 @@ class AudioStreamerService : Service() {
         streamThread = Thread {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
             val buffer = ByteArray(bufferSize)
+            val amplifiedBuffer = ByteArray(bufferSize)
             val socketOutputStream = socket?.getOutputStream()
             val bufferedOut = socketOutputStream?.let { java.io.BufferedOutputStream(it, 65536) }
             var chunks = 0
             var totalBytes = 0
+            var lastDiagnosticChunks = 0
+            var lastDiagnosticBytes = 0
             while (isStreaming && audioRecord != null) {
                 val read = audioRecord!!.read(buffer, 0, buffer.size)
                 if (read > 0 && bufferedOut != null) {
-                    val amplified = amplify(buffer, read, amplification)
-                    bufferedOut.write(amplified, 0, amplified.size)
-                    bytesSent += amplified.size
-                    totalBytes += amplified.size
+                    val amplifiedLen = amplify(buffer, read, amplification, amplifiedBuffer)
+                    bufferedOut.write(amplifiedBuffer, 0, amplifiedLen)
+                    bytesSent += amplifiedLen
+                    totalBytes += amplifiedLen
                     chunks++
-                    if (chunks % 100 == 0) {
+                    if (chunks % 200 == 0) {
                         lastRmsIn = computeRms(buffer, read)
-                        lastRmsOut = computeRms(amplified, amplified.size)
+                        lastRmsOut = computeRms(amplifiedBuffer, amplifiedLen)
                         lastRmsDb = if (lastRmsOut > 0) 20 * log10(lastRmsOut / 32768.0) else -60.0
-                        android.util.Log.d("AudioStreamer", "Sent $totalBytes bytes in $chunks chunks")
+                        val deltaChunks = chunks - lastDiagnosticChunks
+                        val deltaBytes = totalBytes - lastDiagnosticBytes
+                        android.util.Log.d("AudioStreamer", "Chunk=$read, amplified=$amplifiedLen, "
+                              + "sent=$deltaBytes bytes in $deltaChunks chunks")
+                        lastDiagnosticChunks = chunks
+                        lastDiagnosticBytes = totalBytes
                     }
                 } else if (read < 0) {
                     android.util.Log.e("AudioStreamer", "AudioRecord read error: $read")
@@ -268,10 +278,12 @@ class AudioStreamerService : Service() {
         stopSelf()
     }
 
-    private fun amplify(data: ByteArray, length: Int, factor: Float): ByteArray {
-        if (factor <= 1.0f) return data.copyOf(length)
+    private fun amplify(data: ByteArray, length: Int, factor: Float, out: ByteArray = ByteArray(length)): Int {
+        if (factor <= 1.0f) {
+            data.copyInto(out, endIndex = length)
+            return length
+        }
 
-        val amplified = ByteArray(length)
         var i = 0
         while (i < length - 1) {
             val low = data[i].toInt() and 0xFF
@@ -283,14 +295,14 @@ class AudioStreamerService : Service() {
             amplifiedSample = max(-32768, min(32767, amplifiedSample))
             if (amplifiedSample < 0) amplifiedSample += 65536
 
-            amplified[i] = (amplifiedSample and 0xFF).toByte()
-            amplified[i + 1] = ((amplifiedSample shr 8) and 0xFF).toByte()
+            out[i] = (amplifiedSample and 0xFF).toByte()
+            out[i + 1] = ((amplifiedSample shr 8) and 0xFF).toByte()
             i += 2
         }
         if (length % 2 != 0) {
-            amplified[length - 1] = data[length - 1]
+            out[length - 1] = data[length - 1]
         }
-        return amplified
+        return length
     }
 
     private fun computeRms(data: ByteArray, length: Int): Double {

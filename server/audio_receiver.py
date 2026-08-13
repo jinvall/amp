@@ -225,6 +225,8 @@ class AudioReceiver:
         print(f"Client connected: {addr}")
         self.clients.add(conn)
         try:
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 131072)
             # Read initial config line
             config = self._read_config(conn)
             if config is not None:
@@ -236,6 +238,8 @@ class AudioReceiver:
                 chunk = conn.recv(65536)
                 if not chunk:
                     break
+                if self.bytes_since_last_segment % (BYTES_PER_SECOND * 5) < len(chunk):
+                    print(f"[{datetime.now().isoformat()}] recv={len(chunk)} bytes")
                 self._process_audio(chunk)
         except Exception as e:
             print(f"Client {addr} error: {e}")
