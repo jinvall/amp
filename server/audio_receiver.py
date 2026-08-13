@@ -14,6 +14,7 @@ import os
 import sys
 import time
 import struct
+import queue as queue_module
 from datetime import datetime
 from collections import deque
 
@@ -233,14 +234,25 @@ class AudioReceiver:
                 self._apply_client_config(config)
                 print(f"[{datetime.now().isoformat()}] Applied config from {addr}: {config}")
 
-            # Process audio stream
+            queue = queue_module.Queue(maxsize=50)
+            worker = threading.Thread(target=self._process_queue, args=(queue,), daemon=True)
+            worker.start()
+
+            # Receive audio stream
             while self.running:
                 chunk = conn.recv(65536)
                 if not chunk:
                     break
                 if self.bytes_since_last_segment % (BYTES_PER_SECOND * 5) < len(chunk):
                     print(f"[{datetime.now().isoformat()}] recv={len(chunk)} bytes")
-                self._process_audio(chunk)
+                if not queue.full():
+                    queue.put_nowait(chunk)
+                else:
+                    try:
+                        queue.get_nowait()
+                        queue.put_nowait(chunk)
+                    except Exception:
+                        pass
         except Exception as e:
             print(f"Client {addr} error: {e}")
         finally:
@@ -291,6 +303,18 @@ class AudioReceiver:
                     print(f"[{datetime.now().isoformat()}] Updated breathing cooldown to {val}s")
         except Exception as e:
             print(f"[{datetime.now().isoformat()}] Failed to apply client config: {e}")
+
+    def _process_queue(self, q):
+        """Worker thread: drain audio queue and process chunks."""
+        while self.running:
+            try:
+                chunk = q.get(timeout=0.1)
+            except Exception:
+                continue
+            try:
+                self._process_audio(chunk)
+            except Exception as e:
+                print(f"Worker error: {e}")
 
     def start(self):
         self.running = True

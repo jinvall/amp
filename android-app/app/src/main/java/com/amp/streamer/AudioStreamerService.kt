@@ -14,6 +14,8 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 import kotlin.math.log10
 import org.json.JSONObject
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
 
 class AudioStreamerService : Service() {
 
@@ -209,37 +211,51 @@ class AudioStreamerService : Service() {
         audioRecord?.startRecording()
         android.util.Log.d("AudioStreamer", "Recording started")
 
-        streamThread = Thread {
+        val queue = ArrayBlockingQueue<ByteArray>(50)
+        val amplifiedBuffer = ByteArray(bufferSize)
+
+        val producer = Thread {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
             val buffer = ByteArray(bufferSize)
-            val amplifiedBuffer = ByteArray(bufferSize)
+            while (isStreaming && audioRecord != null) {
+                val read = audioRecord!!.read(buffer, 0, buffer.size)
+                if (read > 0) {
+                    val chunk = buffer.copyOf(read)
+                    if (!queue.offer(chunk)) {
+                        queue.poll()
+                        queue.offer(chunk)
+                    }
+                } else if (read < 0) {
+                    android.util.Log.e("AudioStreamer", "AudioRecord read error: $read")
+                }
+            }
+        }.also { it.start() }
+
+        streamThread = Thread {
             val socketOutputStream = socket?.getOutputStream()
             val bufferedOut = socketOutputStream?.let { java.io.BufferedOutputStream(it, 65536) }
             var chunks = 0
             var totalBytes = 0
             var lastDiagnosticChunks = 0
             var lastDiagnosticBytes = 0
-            while (isStreaming && audioRecord != null) {
-                val read = audioRecord!!.read(buffer, 0, buffer.size)
-                if (read > 0 && bufferedOut != null) {
-                    val amplifiedLen = amplify(buffer, read, amplification, amplifiedBuffer)
-                    bufferedOut.write(amplifiedBuffer, 0, amplifiedLen)
-                    bytesSent += amplifiedLen
-                    totalBytes += amplifiedLen
-                    chunks++
-                    lastRmsIn = computeRms(buffer, read)
-                    lastRmsOut = computeRms(amplifiedBuffer, amplifiedLen)
-                    lastRmsDb = if (lastRmsOut > 0) 20 * log10(lastRmsOut / 32768.0) else -60.0
-                    if (chunks % 200 == 0) {
-                        val deltaChunks = chunks - lastDiagnosticChunks
-                        val deltaBytes = totalBytes - lastDiagnosticBytes
-                        android.util.Log.d("AudioStreamer", "Chunk=$read, amplified=$amplifiedLen, "
-                              + "sent=$deltaBytes bytes in $deltaChunks chunks")
-                        lastDiagnosticChunks = chunks
-                        lastDiagnosticBytes = totalBytes
-                    }
-                } else if (read < 0) {
-                    android.util.Log.e("AudioStreamer", "AudioRecord read error: $read")
+            while (isStreaming || !queue.isEmpty()) {
+                val chunk = queue.poll(100, TimeUnit.MILLISECONDS)
+                if (chunk == null) continue
+                val amplifiedLen = amplify(chunk, chunk.size, amplification, amplifiedBuffer)
+                bufferedOut?.write(amplifiedBuffer, 0, amplifiedLen)
+                bytesSent += amplifiedLen
+                totalBytes += amplifiedLen
+                chunks++
+                lastRmsIn = computeRms(chunk, chunk.size)
+                lastRmsOut = computeRms(amplifiedBuffer, amplifiedLen)
+                lastRmsDb = if (lastRmsOut > 0) 20 * log10(lastRmsOut / 32768.0) else -60.0
+                if (chunks % 200 == 0) {
+                    val deltaChunks = chunks - lastDiagnosticChunks
+                    val deltaBytes = totalBytes - lastDiagnosticBytes
+                    android.util.Log.d("AudioStreamer", "Chunk=${chunk.size}, amplified=$amplifiedLen, "
+                          + "sent=$deltaBytes bytes in $deltaChunks chunks")
+                    lastDiagnosticChunks = chunks
+                    lastDiagnosticBytes = totalBytes
                 }
             }
             try {
