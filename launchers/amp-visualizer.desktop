@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=AMP Visualizer
+Comment=Silver live audio visualizer (waveform + spectrogram)
+Icon=lary
+Exec=/home/jason/amp/launchers/amp-visualizer.sh
+Terminal=false
+Categories=Audio;AudioVideo;Utility;
+StartupNotify=true
+MimeType=
+X-GNOME-Autostart-enabled=true

@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AMP — Live Audio Visualizer</title>
+<style>
+  /* SRP theme tokens (mirrors srp-css-theme-pack) */
+  :root {
+    --color-bg: #0f0a18;
+    --color-surface: #1a1230;
+    --color-text: #f3f3f7;
+    --color-text-muted: #c8c9d4;
+    --color-primary: #12f012;
+    --color-primary-contrast: #041105;
+    --color-secondary: #7a2fff;
+    --color-accent: #00d1ff;
+    --color-border: #3d2d61;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface);
+  }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .5px; }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--color-text-muted);
+    box-shadow: 0 0 8px currentColor;
+  }
+  .status-dot.live { background: var(--color-primary); color: var(--color-primary); }
+  .spacer { flex: 1; }
+  .meter {
+    display: flex; align-items: center; gap: 8px;
+    font-variant-numeric: tabular-nums; font-size: 13px;
+    color: var(--color-text-muted);
+  }
+  .meter b { color: var(--color-text); }
+  .latency-val { min-width: 72px; text-align: right; }
+  .latency-val.ok { color: var(--color-primary); }
+  .latency-val.warn { color: #ffd23f; }
+  .latency-val.over { color: #ff4d4d; }
+  main { padding: 14px 18px; display: flex; flex-direction: column; gap: 14px; }
+  .panel {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .panel .label {
+    padding: 8px 12px; font-size: 12px; color: var(--color-text-muted);
+    border-bottom: 1px solid var(--color-border);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  canvas { display: block; width: 100%; }
+  #waveform { height: 220px; }
+  #spectrogram { height: 320px; }
+  .hint { font-size: 11px; color: var(--color-text-muted); }
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  select, button {
+    background: var(--color-bg); color: var(--color-text);
+    border: 1px solid var(--color-border); border-radius: 6px;
+    padding: 5px 10px; font-size: 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--color-accent); }
+  input[type=text] {
+    background: var(--color-bg); color: var(--color-text);
+    border: 1px solid var(--color-border); border-radius: 6px;
+    padding: 5px 10px; font-size: 12px; width: 180px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <span id="statusDot" class="status-dot"></span>
+  <h1>AMP · Live Audio Visualizer</h1>
+  <div class="toolbar">
+    <input id="wsUrl" type="text" value="" placeholder="ws://host:8092" />
+    <button id="connectBtn">Connect</button>
+  </div>
+  <div class="spacer"></div>
+  <div class="meter">
+    <span>FPS</span><b id="fpsVal">0</b>
+    <span>RMS</span><b id="rmsVal">0.000</b>
+    <span style="margin-left:14px">Latency</span>
+    <span id="latVal" class="latency-val ok">— ms</span>
+    <span id="budgetVal" class="hint"></span>
+  </div>
+</header>
+
+<main>
+  <div class="panel">
+    <div class="label"><span>Waveform</span><span class="hint">scrolling · click to freeze</span></div>
+    <canvas id="waveform"></canvas>
+  </div>
+  <div class="panel">
+    <div class="label">
+      <span>Spectrogram</span>
+      <span class="toolbar">
+        <span class="hint">scrolling · low→high freq ↓</span>
+        <label class="hint">colormap
+          <select id="colormap">
+            <option value="inferno">inferno</option>
+            <option value="viridis">viridis</option>
+            <option value="mono">mono (green)</option>
+          </select>
+        </label>
+        <label class="hint">filter
+          <select id="specPreset">
+            <option value="logarythmic">logarythmic</option>
+            <option value="linear">linear</option>
+            <option value="mel">mel</option>
+            <option value="hann">hann</option>
+            <option value="haris">haris</option>
+            <option value="black">black</option>
+            <option value="kalman">kalman</option>
+          </select>
+        </label>
+      </span>
+    </div>
+    <canvas id="spectrogram"></canvas>
+  </div>
+</main>
+
+<script>
+"use strict";
+(function () {
+  // ── Config (filled by server "config" hello, defaults otherwise) ──
+  const cfg = {
+    sampleRate: 44100,
+    frameSec: 0.020,
+    waveformPoints: 256,
+    spectrogramBins: 256,
+    budgetMs: 300.0,
+  };
+
+  // ── DOM ──
+  const waveCanvas = document.getElementById('waveform');
+  const specCanvas = document.getElementById('spectrogram');
+  const wctx = waveCanvas.getContext('2d');
+  const sctx = specCanvas.getContext('2d');
+  const statusDot = document.getElementById('statusDot');
+  const rmsVal = document.getElementById('rmsVal');
+  const latVal = document.getElementById('latVal');
+  const budgetVal = document.getElementById('budgetVal');
+  const connectBtn = document.getElementById('connectBtn');
+  const wsUrlInput = document.getElementById('wsUrl');
+  const colormapSel = document.getElementById('colormap');
+
+  budgetVal.textContent = 'budget ' + cfg.budgetMs.toFixed(0) + 'ms';
+
+  // ── Ring buffers ──
+  const WAVE_HISTORY = 600;   // ~12 s of frames at 50fps
+  const SPEC_HISTORY = 400;   // ~8 s of spectrogram columns
+  let waveHistory = [];       // array of Float32Array(waveformPoints)
+  let specHistory = [];       // array of Float32Array(spectrogramBins)
+  let latestRms = 0;
+  let frozen = false;
+
+  waveCanvas.addEventListener('click', () => { frozen = !frozen; });
+
+  // ── HiDPI canvas sizing ──
+  function fitCanvas(canvas) {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+    canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { w: rect.width, h: rect.height };
+  }
+  let waveSize = fitCanvas(waveCanvas);
+  let specSize = fitCanvas(specCanvas);
+  window.addEventListener('resize', () => {
+    waveSize = fitCanvas(waveCanvas);
+    specSize = fitCanvas(specCanvas);
+  });
+
+  // ── Colormaps (precomputed 256-entry lookup) ──
+  function buildColormap(name) {
+    const lut = new Array(256);
+    for (let i = 0; i < 256; i++) {
+      const t = i / 255;
+      let r, g, b;
+      if (name === 'mono') {
+        r = 18 * t; g = 240 * t; b = 18 * t;
+      } else if (name === 'viridis') {
+        // cheap viridis approximation
+        r = Math.round(255 * (0.27 + 0.90 * t - 0.5 * t * t));
+        g = Math.round(255 * (0.00 + 0.85 * t));
+        b = Math.round(255 * (0.33 + 0.51 * t - 0.25 * t * t));
+      } else { // inferno-ish
+        r = Math.round(255 * Math.min(1, 0.0 + 1.4 * t));
+        g = Math.round(255 * Math.min(1, Math.max(0, -0.3 + 1.3 * t - 0.4 * t * t)));
+        b = Math.round(255 * Math.min(1, Math.max(0, 0.4 + 0.9 * t - 1.1 * t * t)));
+      }
+      lut[i] = 'rgb(' + (r > 255 ? 255 : r) + ',' + (g > 255 ? 255 : g) + ',' + (b > 255 ? 255 : b) + ')';
+    }
+    return lut;
+  }
+  let colormap = buildColormap(colormapSel.value);
+  colormapSel.addEventListener('change', () => { colormap = buildColormap(colormapSel.value); });
+  const specPreset = document.getElementById('specPreset');
+  if (specPreset) {
+    specPreset.addEventListener('change', () => {
+      const preset = specPreset.value;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({type: 'preset', preset}));
+      }
+    });
+  }
+
+  // ── WebSocket (auto-reconnect with backoff; never blocks the audio path) ──
+  let ws = null;
+  let wsRetry = 0;
+  let wsRetryTimer = null;
+  let lastServerTs = 0;     // seconds (epoch) of most recent frame
+  let lastPaintTs = 0;      // performance.now() when we received it
+  let estLatencyMs = 0;
+  let frameCount = 0;
+  let lastFpsTime = performance.now();
+  let currentFps = 0;
+  const fpsVal = document.getElementById('fpsVal');
+
+  function setStatus(state, label) {
+    statusDot.classList.remove('live');
+    if (state === 'live') statusDot.classList.add('live');
+    statusDot.title = label || state;
+  }
+
+  function connect(url) {
+    if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
+    if (ws) { try { ws.close(); } catch (e) {} }
+    setStatus('connecting', 'connecting…');
+    ws = new WebSocket(url);
+    ws.onopen = () => { wsRetry = 0; setStatus('live', 'connected'); };
+    ws.onclose = () => {
+      setStatus('down', 'disconnected — retrying');
+      // Backoff: 0.5s, 1s, 2s, 4s … capped at 8s.
+      wsRetry = Math.min(wsRetry + 1, 6);
+      const delay = Math.min(500 * Math.pow(2, wsRetry - 1), 8000);
+      wsRetryTimer = setTimeout(() => connect(url), delay);
+    };
+    ws.onerror = () => { /* onclose will handle reconnect */ };
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'config') {
+        Object.assign(cfg, msg);
+        budgetVal.textContent = 'budget ' + cfg.budgetMs.toFixed(0) + 'ms';
+        return;
+      }
+      // analysis frame
+      const wave = Float32Array.from(msg.wave);
+      const spec = Float32Array.from(msg.spec);
+      if (!frozen) {
+        waveHistory.push(wave);
+        if (waveHistory.length > WAVE_HISTORY) waveHistory.shift();
+        specHistory.push(spec);
+        if (specHistory.length > SPEC_HISTORY) specHistory.shift();
+      }
+      latestRms = msg.rms || 0;
+      lastServerTs = msg.t;
+      lastPaintTs = performance.now();
+      // latency is measured at paint time relative to server timestamp
+      frameCount++;
+      const now = performance.now();
+      if (now - lastFpsTime >= 1000) {
+        currentFps = Math.round(frameCount / ((now - lastFpsTime) / 1000));
+        frameCount = 0;
+        lastFpsTime = now;
+      }
+      // Log inter-frame arrival interval for debugging.
+      if (window.__lastFrameArrival) {
+        const dt = now - window.__lastFrameArrival;
+        if (dt > 150) {
+          console.warn('[viz] frame gap', dt.toFixed(0), 'ms @', new Date().toISOString());
+        }
+      }
+      window.__lastFrameArrival = now;
+    };
+  }
+
+  connectBtn.addEventListener('click', () => {
+    const url = wsUrlInput.value.trim();
+    if (url) connect(url);
+  });
+
+  // ── Drawing ──
+  function drawWaveform() {
+    const { w, h } = waveSize;
+    wctx.clearRect(0, 0, w, h);
+    wctx.fillStyle = '#0f0a18';
+    wctx.fillRect(0, 0, w, h);
+    // midline
+    wctx.strokeStyle = 'rgba(61,45,97,0.6)';
+    wctx.lineWidth = 1;
+    wctx.beginPath(); wctx.moveTo(0, h / 2); wctx.lineTo(w, h / 2); wctx.stroke();
+
+    if (waveHistory.length === 0) return;
+    const n = cfg.waveformPoints;
+    const colW = w / WAVE_HISTORY;
+    for (let f = 0; f < waveHistory.length; f++) {
+      const buf = waveHistory[f];
+      const x = f * colW;
+      wctx.strokeStyle = 'rgba(0,209,255,0.85)';
+      wctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const px = x + (i / n) * colW;
+        const py = h / 2 - buf[i] * (h / 2 - 4);
+        if (i === 0) wctx.moveTo(px, py); else wctx.lineTo(px, py);
+      }
+      wctx.stroke();
+    }
+  }
+
+  function drawSpectrogram() {
+    const { w, h } = specSize;
+    // shift existing image left by one column width, then draw newest column on right
+    const n = cfg.spectrogramBins;
+    const colW = w / SPEC_HISTORY;
+    // We redraw fully (cheap enough at these sizes); scrolling illusion via history order.
+    sctx.clearRect(0, 0, w, h);
+    sctx.fillStyle = '#0f0a18';
+    sctx.fillRect(0, 0, w, h);
+    for (let f = 0; f < specHistory.length; f++) {
+      const buf = specHistory[f];
+      const x = f * colW;
+      for (let i = 0; i < n; i++) {
+        const v = buf[i];
+        const idx = Math.max(0, Math.min(255, Math.round(v * 255)));
+        sctx.fillStyle = colormap[idx];
+        // y: low freq at bottom
+        const y = (1 - i / n) * h;
+        sctx.fillRect(x, y, colW + 1, h / n + 1);
+      }
+    }
+  }
+
+  function updateMeters() {
+    if (fpsVal) fpsVal.textContent = currentFps;
+    rmsVal.textContent = latestRms.toFixed(3);
+    // Latency = time since the most recent frame's server timestamp, measured now.
+    if (lastServerTs > 0) {
+      const nowSec = Date.now() / 1000;
+      // Combine transport age (server->now) — server ts is in epoch seconds.
+      estLatencyMs = Math.max(0, (nowSec - lastServerTs) * 1000);
+    }
+    latVal.textContent = estLatencyMs.toFixed(0) + ' ms';
+    if (estLatencyMs <= cfg.budgetMs * 0.7) latVal.className = 'latency-val ok';
+    else if (estLatencyMs <= cfg.budgetMs) latVal.className = 'latency-val warn';
+    else latVal.className = 'latency-val over';
+  }
+
+  function loop() {
+    drawWaveform();
+    drawSpectrogram();
+    updateMeters();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // Auto-connect using current host + default viz port if no URL provided.
+  if (!wsUrlInput.value) {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    wsUrlInput.value = proto + '://' + location.hostname + ':8092';
+  }
+})();
+</script>
+</body>
+</html>

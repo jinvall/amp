@@ -50,40 +50,34 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        binding.sbAmplification.progress = 100
-        binding.tvAmplificationValue.text = amplificationFromProgress(binding.sbAmplification.progress).toString()
+        // Restore persisted slider positions (defaults if none saved).
+        val prefs = getPreferences(Context.MODE_PRIVATE)
+        binding.sbAmplification.progress = prefs.getInt(KEY_AMP, 100)
+        binding.sbGainCeiling.progress = prefs.getInt(KEY_CEILING, 50)
+        binding.sbPreGain.progress = prefs.getInt(KEY_PREGain, 0)
+        binding.sbEq1.progress = prefs.getInt(KEY_EQ1, 50)
+        binding.sbEq2.progress = prefs.getInt(KEY_EQ2, 50)
+        binding.sbEq3.progress = prefs.getInt(KEY_EQ3, 50)
+        binding.sbEq4.progress = prefs.getInt(KEY_EQ4, 50)
+        binding.sbEq5.progress = prefs.getInt(KEY_EQ5, 50)
+        binding.sbBreathingSensitivity.progress = prefs.getInt(KEY_SENS, 80)
+        binding.sbCooldown.progress = prefs.getInt(KEY_COOLDOWN, 20)
+        binding.sbNoiseGate.progress = prefs.getInt(KEY_NOISEGATE, 10)
+        binding.sbSegmentDuration.progress = prefs.getInt(KEY_SEGMENT, 50)
 
-        binding.sbBreathingSensitivity.progress = 80
-        binding.tvBreathingSensitivityValue.text = sensitivityFromProgress(binding.sbBreathingSensitivity.progress).toString()
-
-        binding.sbCooldown.progress = 20
-        binding.tvCooldownValue.text = cooldownFromProgress(binding.sbCooldown.progress).toString()
-
-        binding.sbNoiseGate.progress = 10
-        binding.tvNoiseGateValue.text = noiseGateFromProgress(binding.sbNoiseGate.progress).toString()
-
-        binding.sbSegmentDuration.progress = 50
-        binding.tvSegmentDurationValue.text = segmentDurationFromProgress(binding.sbSegmentDuration.progress).toString()
-
-        binding.sbAmplification.setOnSeekBarChangeListener(seekListener { progress ->
-            binding.tvAmplificationValue.text = amplificationFromProgress(progress).toString()
-        })
-
-        binding.sbBreathingSensitivity.setOnSeekBarChangeListener(seekListener { progress ->
-            binding.tvBreathingSensitivityValue.text = sensitivityFromProgress(progress).toString()
-        })
-
-        binding.sbCooldown.setOnSeekBarChangeListener(seekListener { progress ->
-            binding.tvCooldownValue.text = cooldownFromProgress(progress).toString()
-        })
-
-        binding.sbNoiseGate.setOnSeekBarChangeListener(seekListener { progress ->
-            binding.tvNoiseGateValue.text = noiseGateFromProgress(progress).toString()
-        })
-
-        binding.sbSegmentDuration.setOnSeekBarChangeListener(seekListener { progress ->
-            binding.tvSegmentDurationValue.text = segmentDurationFromProgress(progress).toString()
-        })
+        refreshAllLabels()
+        wireSeekBar(binding.sbAmplification) { amplificationFromProgress(it) }
+        wireSeekBar(binding.sbGainCeiling) { gainCeilingFromProgress(it) }
+        wireSeekBar(binding.sbPreGain) { preGainFromProgress(it) }
+        wireSeekBar(binding.sbEq1) { eqBandFromProgress(it) }
+        wireSeekBar(binding.sbEq2) { eqBandFromProgress(it) }
+        wireSeekBar(binding.sbEq3) { eqBandFromProgress(it) }
+        wireSeekBar(binding.sbEq4) { eqBandFromProgress(it) }
+        wireSeekBar(binding.sbEq5) { eqBandFromProgress(it) }
+        wireSeekBar(binding.sbBreathingSensitivity) { sensitivityFromProgress(it) }
+        wireSeekBar(binding.sbCooldown) { cooldownFromProgress(it) }
+        wireSeekBar(binding.sbNoiseGate) { noiseGateFromProgress(it) }
+        wireSeekBar(binding.sbSegmentDuration) { segmentDurationFromProgress(it) }
 
         binding.btnStartStop.setOnClickListener {
             if (bound && streamerService?.isCurrentlyStreaming == true) {
@@ -94,15 +88,89 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun seekListener(onChange: (Int) -> Unit): android.widget.SeekBar.OnSeekBarChangeListener =
-        object : android.widget.SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
-                if (fromUser) onChange(progress)
-            }
+    private fun refreshAllLabels() {
+        binding.tvAmplificationValue.text = amplificationFromProgress(binding.sbAmplification.progress).toString()
+        binding.tvGainCeilingValue.text = gainCeilingFromProgress(binding.sbGainCeiling.progress).toString()
+        binding.tvPreGainValue.text = preGainFromProgress(binding.sbPreGain.progress).toString()
+        binding.tvEq1Value.text = eqBandFromProgress(binding.sbEq1.progress).toString()
+        binding.tvEq2Value.text = eqBandFromProgress(binding.sbEq2.progress).toString()
+        binding.tvEq3Value.text = eqBandFromProgress(binding.sbEq3.progress).toString()
+        binding.tvEq4Value.text = eqBandFromProgress(binding.sbEq4.progress).toString()
+        binding.tvEq5Value.text = eqBandFromProgress(binding.sbEq5.progress).toString()
+        binding.tvBreathingSensitivityValue.text = sensitivityFromProgress(binding.sbBreathingSensitivity.progress).toString()
+        binding.tvCooldownValue.text = cooldownFromProgress(binding.sbCooldown.progress).toString()
+        binding.tvNoiseGateValue.text = noiseGateFromProgress(binding.sbNoiseGate.progress).toString()
+        binding.tvSegmentDurationValue.text = segmentDurationFromProgress(binding.sbSegmentDuration.progress).toString()
+    }
 
-            override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {}
+    private fun wireSeekBar(seekBar: android.widget.SeekBar, label: (Int) -> Any) {
+        val labelView: TextView? = when (seekBar.id) {
+            R.id.sbAmplification -> binding.tvAmplificationValue
+            R.id.sbGainCeiling -> binding.tvGainCeilingValue
+            R.id.sbPreGain -> binding.tvPreGainValue
+            R.id.sbEq1 -> binding.tvEq1Value
+            R.id.sbEq2 -> binding.tvEq2Value
+            R.id.sbEq3 -> binding.tvEq3Value
+            R.id.sbEq4 -> binding.tvEq4Value
+            R.id.sbEq5 -> binding.tvEq5Value
+            R.id.sbBreathingSensitivity -> binding.tvBreathingSensitivityValue
+            R.id.sbCooldown -> binding.tvCooldownValue
+            R.id.sbNoiseGate -> binding.tvNoiseGateValue
+            R.id.sbSegmentDuration -> binding.tvSegmentDurationValue
+            else -> null
         }
+        seekBar.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                labelView?.text = label(progress).toString()
+            }
+            override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(sb: android.widget.SeekBar?) {
+                saveProgress()
+                pushLiveIfStreaming()
+            }
+        })
+    }
+
+    private fun saveProgress() {
+        val prefs = getPreferences(Context.MODE_PRIVATE)
+        prefs.edit().apply {
+            putInt(KEY_AMP, binding.sbAmplification.progress)
+            putInt(KEY_CEILING, binding.sbGainCeiling.progress)
+            putInt(KEY_PREGain, binding.sbPreGain.progress)
+            putInt(KEY_EQ1, binding.sbEq1.progress)
+            putInt(KEY_EQ2, binding.sbEq2.progress)
+            putInt(KEY_EQ3, binding.sbEq3.progress)
+            putInt(KEY_EQ4, binding.sbEq4.progress)
+            putInt(KEY_EQ5, binding.sbEq5.progress)
+            putInt(KEY_SENS, binding.sbBreathingSensitivity.progress)
+            putInt(KEY_COOLDOWN, binding.sbCooldown.progress)
+            putInt(KEY_NOISEGATE, binding.sbNoiseGate.progress)
+            putInt(KEY_SEGMENT, binding.sbSegmentDuration.progress)
+            apply()
+        }
+    }
+
+    private fun currentEqBands(): FloatArray = floatArrayOf(
+        eqBandFromProgress(binding.sbEq1.progress),
+        eqBandFromProgress(binding.sbEq2.progress),
+        eqBandFromProgress(binding.sbEq3.progress),
+        eqBandFromProgress(binding.sbEq4.progress),
+        eqBandFromProgress(binding.sbEq5.progress)
+    )
+
+    private fun pushLiveIfStreaming() {
+        if (bound && streamerService?.isCurrentlyStreaming == true) {
+            val amp = amplificationFromProgress(binding.sbAmplification.progress)
+            val ceiling = gainCeilingFromProgress(binding.sbGainCeiling.progress)
+            val preGain = preGainFromProgress(binding.sbPreGain.progress)
+            val eq = currentEqBands()
+            val sens = sensitivityFromProgress(binding.sbBreathingSensitivity.progress)
+            val cooldown = cooldownFromProgress(binding.sbCooldown.progress)
+            val segmentSec = segmentDurationFromProgress(binding.sbSegmentDuration.progress)
+            streamerService?.updateLiveParams(amp, ceiling, preGain, eq, sens, cooldown, segmentSec)
+            streamerService?.pushServerConfig(sens, cooldown, segmentSec / 60)
+        }
+    }
 
     override fun onStart() {
         super.onStart()
@@ -174,6 +242,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         val amplification = amplificationFromProgress(binding.sbAmplification.progress)
+        val gainCeiling = gainCeilingFromProgress(binding.sbGainCeiling.progress)
+        val preGain = preGainFromProgress(binding.sbPreGain.progress)
+        val eqBands = floatArrayOf(
+            eqBandFromProgress(binding.sbEq1.progress),
+            eqBandFromProgress(binding.sbEq2.progress),
+            eqBandFromProgress(binding.sbEq3.progress),
+            eqBandFromProgress(binding.sbEq4.progress),
+            eqBandFromProgress(binding.sbEq5.progress)
+        )
         val sensitivity = sensitivityFromProgress(binding.sbBreathingSensitivity.progress)
         val cooldown = cooldownFromProgress(binding.sbCooldown.progress)
         val segmentDuration = segmentDurationFromProgress(binding.sbSegmentDuration.progress)
@@ -183,6 +260,9 @@ class MainActivity : AppCompatActivity() {
             putExtra(AudioStreamerService.EXTRA_SERVER_IP, ip)
             putExtra(AudioStreamerService.EXTRA_SERVER_PORT, port)
             putExtra(AudioStreamerService.EXTRA_AMPLIFICATION, amplification)
+            putExtra(AudioStreamerService.EXTRA_AMPLIFICATION_CEILING, gainCeiling)
+            putExtra(AudioStreamerService.EXTRA_PRE_GAIN, preGain)
+            putExtra(AudioStreamerService.EXTRA_EQ_BANDS, eqBands)
             putExtra(AudioStreamerService.EXTRA_BREATHING_SENSITIVITY, sensitivity)
             putExtra(AudioStreamerService.EXTRA_BREATHING_COOLDOWN, cooldown)
             putExtra(AudioStreamerService.EXTRA_SEGMENT_DURATION, segmentDuration)
@@ -266,15 +346,38 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        // SharedPreferences keys (store raw 0-100 progress so converters stay source of truth)
+        private const val KEY_AMP = "amp"
+        private const val KEY_CEILING = "ceiling"
+        private const val KEY_PREGain = "preGain"
+        private const val KEY_EQ1 = "eq1"
+        private const val KEY_EQ2 = "eq2"
+        private const val KEY_EQ3 = "eq3"
+        private const val KEY_EQ4 = "eq4"
+        private const val KEY_EQ5 = "eq5"
+        private const val KEY_SENS = "sens"
+        private const val KEY_COOLDOWN = "cooldown"
+        private const val KEY_NOISEGATE = "noisegate"
+        private const val KEY_SEGMENT = "segment"
+
         private const val MAX_SENSITIVITY = 100.0
         private const val MAX_COOLDOWN = 10.0
         private const val MIN_SEGMENT_DURATION_MIN = 1
         private const val MAX_SEGMENT_DURATION_MIN = 10
+        private const val MIN_GAIN_CEILING = 100.0f
+        private const val MAX_GAIN_CEILING = 1000.0f
+        private const val MIN_PRE_GAIN = 1.0f
+        private const val MAX_PRE_GAIN = 10.0f
+        private const val MIN_EQ_DB = -12.0
+        private const val MAX_EQ_DB = 12.0
 
         fun amplificationFromProgress(progress: Int): Float = 1.0f + (progress / 100.0f) * 99.0f
         fun sensitivityFromProgress(progress: Int): Double = (progress / 100.0) * MAX_SENSITIVITY
         fun cooldownFromProgress(progress: Int): Double = (progress / 100.0) * MAX_COOLDOWN
-        fun segmentDurationFromProgress(progress: Int): Int = MIN_SEGMENT_DURATION_MIN + (progress / 100.0f * (MAX_SEGMENT_DURATION_MIN - MIN_SEGMENT_DURATION_MIN)).roundToInt()
-        fun noiseGateFromProgress(progress: Int): Int = (progress / 100.0f * 2000).roundToInt()
+        fun segmentDurationFromProgress(progress: Int): Int = (MIN_SEGMENT_DURATION_MIN + (progress / 100.0) * (MAX_SEGMENT_DURATION_MIN - MIN_SEGMENT_DURATION_MIN)).toInt()
+        fun noiseGateFromProgress(progress: Int): Int = progress * 10
+        fun gainCeilingFromProgress(progress: Int): Float = MIN_GAIN_CEILING + (progress / 100.0f) * (MAX_GAIN_CEILING - MIN_GAIN_CEILING)
+        fun preGainFromProgress(progress: Int): Float = MIN_PRE_GAIN + (progress / 100.0f) * (MAX_PRE_GAIN - MIN_PRE_GAIN)
+        fun eqBandFromProgress(progress: Int): Float = (MIN_EQ_DB + (progress / 100.0f) * (MAX_EQ_DB - MIN_EQ_DB)).toFloat()
     }
 }

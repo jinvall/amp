@@ -1,0 +1,30 @@
+[Unit]
+Description=AMP Audio Receiver + real-time visualization feed
+Documentation=https://github.com/amp/streamer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run from the project root so config.json / audio_segments resolve relative to CWD.
+WorkingDirectory=/home/jason/amp
+ExecStart=/usr/bin/env python3 /home/jason/amp/server/amp.py --host 0.0.0.0
+# If the launcher (or either child) dies, restart. The audio path is the critical one.
+Restart=always
+RestartSec=2
+# Don't let a slow start count against restart budget forever.
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+# Hardening (best-effort; relax if the user needs broader access).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=/home/jason/amp
+PrivateTmp=true
+
+# Kill the whole process group so orphaned background jobs (receiver/web) are cleaned up.
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

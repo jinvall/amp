@@ -1,253 +1,492 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="16dp"
-    android:background="@color/srp_bg">
-
-    <com.google.android.material.textfield.TextInputLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="Server IP"
-        android:textColorHint="@color/srp_text_muted"
-        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
-
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/etServerIp"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:inputType="text"
-            android:text=""
-            android:textColor="@color/srp_text"
-            android:backgroundTint="@color/srp_surface" />
-    </com.google.android.material.textfield.TextInputLayout>
-
-    <com.google.android.material.textfield.TextInputLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="Server Port"
-        android:layout_marginTop="8dp"
-        android:textColorHint="@color/srp_text_muted"
-        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
-
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/etServerPort"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:inputType="number"
-            android:text="8080"
-            android:textColor="@color/srp_text"
-            android:backgroundTint="@color/srp_surface" />
-    </com.google.android.material.textfield.TextInputLayout>
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Segment Duration"
-        android:layout_marginTop="12dp"
-        android:textSize="14sp"
-        android:textColor="@color/srp_text" />
-
-    <SeekBar
-        android:id="@+id/sbSegmentDuration"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:max="100"
-        android:progress="50"
-        android:thumbTint="@color/srp_accent"
-        android:progressTint="@color/srp_accent" />
-
-    <TextView
-        android:id="@+id/tvSegmentDurationValue"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="5 min"
-        android:gravity="end"
-        android:textSize="12sp"
-        android:layout_marginTop="2dp"
-        android:textColor="@color/srp_text_muted" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Amplification"
-        android:layout_marginTop="12dp"
-        android:textSize="14sp"
-        android:textColor="@color/srp_text" />
-
-    <SeekBar
-        android:id="@+id/sbAmplification"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:max="100"
-        android:progress="50"
-        android:thumbTint="@color/srp_primary"
-        android:progressTint="@color/srp_primary" />
-
-    <TextView
-        android:id="@+id/tvAmplificationValue"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="5.0x"
-        android:gravity="end"
-        android:textSize="12sp"
-        android:layout_marginTop="2dp"
-        android:textColor="@color/srp_text_muted" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Breathing Sensitivity"
-        android:layout_marginTop="12dp"
-        android:textSize="14sp"
-        android:textColor="@color/srp_text" />
-
-    <SeekBar
-        android:id="@+id/sbBreathingSensitivity"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:max="100"
-        android:progress="50"
-        android:thumbTint="@color/srp_secondary"
-        android:progressTint="@color/srp_secondary" />
-
-    <TextView
-        android:id="@+id/tvBreathingSensitivityValue"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="50"
-        android:gravity="end"
-        android:textSize="12sp"
-        android:layout_marginTop="2dp"
-        android:textColor="@color/srp_text_muted" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Noise Gate"
-        android:layout_marginTop="12dp"
-        android:textSize="14sp"
-        android:textColor="@color/srp_text" />
-
-    <SeekBar
-        android:id="@+id/sbNoiseGate"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:max="100"
-        android:progress="10"
-        android:thumbTint="@color/srp_primary"
-        android:progressTint="@color/srp_primary" />
-
-    <TextView
-        android:id="@+id/tvNoiseGateValue"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="100"
-        android:gravity="end"
-        android:textSize="12sp"
-        android:layout_marginTop="2dp"
-        android:textColor="@color/srp_text_muted" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Detection Cooldown (sec)"
-        android:layout_marginTop="12dp"
-        android:textSize="14sp"
-        android:textColor="@color/srp_text" />
-
-    <SeekBar
-        android:id="@+id/sbCooldown"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:max="100"
-        android:progress="40"
-        android:thumbTint="@color/srp_accent"
-        android:progressTint="@color/srp_accent" />
-
-    <TextView
-        android:id="@+id/tvCooldownValue"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="4.0s"
-        android:gravity="end"
-        android:textSize="12sp"
-        android:layout_marginTop="2dp"
-        android:textColor="@color/srp_text_muted" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="RMS In / Out / dB"
-        android:layout_marginTop="12dp"
-        android:textSize="14sp"
-        android:textColor="@color/srp_text" />
+    android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginTop="4dp">
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:background="@color/srp_bg">
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Server IP"
+            android:textColorHint="@color/srp_text_muted"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etServerIp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="text"
+                android:text=""
+                android:textColor="@color/srp_text"
+                android:backgroundTint="@color/srp_surface" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Server Port"
+            android:layout_marginTop="8dp"
+            android:textColorHint="@color/srp_text_muted"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etServerPort"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="number"
+                android:text="8080"
+                android:textColor="@color/srp_text"
+                android:backgroundTint="@color/srp_surface" />
+        </com.google.android.material.textfield.TextInputLayout>
 
         <TextView
-            android:id="@+id/tvRmsIn"
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="In: 0"
+            android:text="Segment Duration"
+            android:layout_marginTop="12dp"
+            android:textSize="14sp"
+            android:textColor="@color/srp_text" />
+
+        <SeekBar
+            android:id="@+id/sbSegmentDuration"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="50"
+            android:thumbTint="@color/srp_accent"
+            android:progressTint="@color/srp_accent" />
+
+        <TextView
+            android:id="@+id/tvSegmentDurationValue"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="5 min"
+            android:gravity="end"
             android:textSize="12sp"
+            android:layout_marginTop="2dp"
             android:textColor="@color/srp_text_muted" />
 
         <TextView
-            android:id="@+id/tvRmsOut"
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Out: 0"
-            android:textSize="12sp"
-            android:textColor="@color/srp_text_muted"
-            android:gravity="end" />
+            android:text="Amplification"
+            android:layout_marginTop="12dp"
+            android:textSize="14sp"
+            android:textColor="@color/srp_text" />
+
+        <SeekBar
+            android:id="@+id/sbAmplification"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="100"
+            android:thumbTint="@color/srp_primary"
+            android:progressTint="@color/srp_primary" />
 
         <TextView
-            android:id="@+id/tvRmsDb"
-            android:layout_width="0dp"
+            android:id="@+id/tvAmplificationValue"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="dB: -60"
+            android:text="100.0x"
+            android:gravity="end"
             android:textSize="12sp"
-            android:textColor="@color/srp_text_muted"
-            android:gravity="end" />
+            android:layout_marginTop="2dp"
+            android:textColor="@color/srp_text_muted" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Gain Ceiling"
+            android:layout_marginTop="12dp"
+            android:textSize="14sp"
+            android:textColor="@color/srp_text" />
+
+        <SeekBar
+            android:id="@+id/sbGainCeiling"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="50"
+            android:thumbTint="@color/srp_primary"
+            android:progressTint="@color/srp_primary" />
+
+        <TextView
+            android:id="@+id/tvGainCeilingValue"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="100x"
+            android:gravity="end"
+            android:textSize="12sp"
+            android:layout_marginTop="2dp"
+            android:textColor="@color/srp_text_muted" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Pre-Gain Boost"
+            android:layout_marginTop="12dp"
+            android:textSize="14sp"
+            android:textColor="@color/srp_text" />
+
+        <SeekBar
+            android:id="@+id/sbPreGain"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="0"
+            android:thumbTint="@color/srp_primary"
+            android:progressTint="@color/srp_primary" />
+
+        <TextView
+            android:id="@+id/tvPreGainValue"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="1.0x"
+            android:gravity="end"
+            android:textSize="12sp"
+            android:layout_marginTop="2dp"
+            android:textColor="@color/srp_text_muted" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Equalizer"
+            android:layout_marginTop="12dp"
+            android:textSize="14sp"
+            android:textColor="@color/srp_text" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="4dp">
+
+            <TextView
+                android:id="@+id/tvEq1"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="60 Hz"
+                android:textSize="12sp"
+                android:textColor="@color/srp_text_muted"
+                android:gravity="center" />
+
+            <TextView
+                android:id="@+id/tvEq2"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="230 Hz"
+                android:textSize="12sp"
+                android:textColor="@color/srp_text_muted"
+                android:gravity="center" />
+
+            <TextView
+                android:id="@+id/tvEq3"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="910 Hz"
+                android:textSize="12sp"
+                android:textColor="@color/srp_text_muted"
+                android:gravity="center" />
+
+            <TextView
+                android:id="@+id/tvEq4"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="4 kHz"
+                android:textSize="12sp"
+                android:textColor="@color/srp_text_muted"
+                android:gravity="center" />
+
+            <TextView
+                android:id="@+id/tvEq5"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="14 kHz"
+                android:textSize="12sp"
+                android:textColor="@color/srp_text_muted"
+                android:gravity="center" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="4dp">
+
+            <SeekBar
+                android:id="@+id/sbEq1"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="100"
+                android:progress="50"
+                android:thumbTint="@color/srp_secondary"
+                android:progressTint="@color/srp_secondary" />
+
+            <SeekBar
+                android:id="@+id/sbEq2"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="100"
+                android:progress="50"
+                android:thumbTint="@color/srp_secondary"
+                android:progressTint="@color/srp_secondary" />
+
+            <SeekBar
+                android:id="@+id/sbEq3"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="100"
+                android:progress="50"
+                android:thumbTint="@color/srp_secondary"
+                android:progressTint="@color/srp_secondary" />
+
+            <SeekBar
+                android:id="@+id/sbEq4"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="100"
+                android:progress="50"
+                android:thumbTint="@color/srp_secondary"
+                android:progressTint="@color/srp_secondary" />
+
+            <SeekBar
+                android:id="@+id/sbEq5"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="100"
+                android:progress="50"
+                android:thumbTint="@color/srp_secondary"
+                android:progressTint="@color/srp_secondary" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="4dp">
+
+            <TextView
+                android:id="@+id/tvEq1Value"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="0 dB"
+                android:gravity="center"
+                android:textSize="12sp"
+                android:textColor="@color/srp_text_muted" />
+
+            <TextView
+                android:id="@+id/tvEq2Value"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="0 dB"
+                android:gravity="center"
+                android:textSize="12sp"
+                android:textColor="@color/srp_text_muted" />
+
+            <TextView
+                android:id="@+id/tvEq3Value"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="0 dB"
+                android:gravity="center"
+                android:textSize="12sp"
+                android:textColor="@color/srp_text_muted" />
+
+            <TextView
+                android:id="@+id/tvEq4Value"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="0 dB"
+                android:gravity="center"
+                android:textSize="12sp"
+                android:textColor="@color/srp_text_muted" />
+
+            <TextView
+                android:id="@+id/tvEq5Value"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="0 dB"
+                android:gravity="center"
+                android:textSize="12sp"
+                android:textColor="@color/srp_text_muted" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Breathing Sensitivity"
+            android:layout_marginTop="12dp"
+            android:textSize="14sp"
+            android:textColor="@color/srp_text" />
+
+        <SeekBar
+            android:id="@+id/sbBreathingSensitivity"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="50"
+            android:thumbTint="@color/srp_secondary"
+            android:progressTint="@color/srp_secondary" />
+
+        <TextView
+            android:id="@+id/tvBreathingSensitivityValue"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="50"
+            android:gravity="end"
+            android:textSize="12sp"
+            android:layout_marginTop="2dp"
+            android:textColor="@color/srp_text_muted" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Noise Gate"
+            android:layout_marginTop="12dp"
+            android:textSize="14sp"
+            android:textColor="@color/srp_text" />
+
+        <SeekBar
+            android:id="@+id/sbNoiseGate"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="10"
+            android:thumbTint="@color/srp_primary"
+            android:progressTint="@color/srp_primary" />
+
+        <TextView
+            android:id="@+id/tvNoiseGateValue"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="100"
+            android:gravity="end"
+            android:textSize="12sp"
+            android:layout_marginTop="2dp"
+            android:textColor="@color/srp_text_muted" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Detection Cooldown (sec)"
+            android:layout_marginTop="12dp"
+            android:textSize="14sp"
+            android:textColor="@color/srp_text" />
+
+        <SeekBar
+            android:id="@+id/sbCooldown"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="40"
+            android:thumbTint="@color/srp_accent"
+            android:progressTint="@color/srp_accent" />
+
+        <TextView
+            android:id="@+id/tvCooldownValue"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="4.0s"
+            android:gravity="end"
+            android:textSize="12sp"
+            android:layout_marginTop="2dp"
+            android:textColor="@color/srp_text_muted" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="RMS In / Out / dB"
+            android:layout_marginTop="12dp"
+            android:textSize="14sp"
+            android:textColor="@color/srp_text" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="4dp">
+
+            <TextView
+                android:id="@+id/tvRmsIn"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="In: 0"
+                android:textSize="12sp"
+                android:textColor="@color/srp_text_muted" />
+
+            <TextView
+                android:id="@+id/tvRmsOut"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Out: 0"
+                android:textSize="12sp"
+                android:textColor="@color/srp_text_muted"
+                android:gravity="end" />
+
+            <TextView
+                android:id="@+id/tvRmsDb"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="dB: -60"
+                android:textSize="12sp"
+                android:textColor="@color/srp_text_muted"
+                android:gravity="end" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btnStartStop"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Start Streaming"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="@color/srp_primary"
+            android:textColor="@color/srp_primary_contrast" />
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Idle"
+            android:textSize="14sp"
+            android:layout_marginTop="12dp"
+            android:padding="8dp"
+            android:background="@color/srp_surface"
+            android:textColor="@color/srp_text"
+            android:backgroundTint="@color/srp_surface" />
+
+        <TextView
+            android:id="@+id/tvBytes"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Bytes sent: 0"
+            android:textSize="12sp"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/srp_text_muted" />
+
     </LinearLayout>
-
-    <Button
-        android:id="@+id/btnStartStop"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Start Streaming"
-        android:layout_marginTop="16dp"
-        android:backgroundTint="@color/srp_primary"
-        android:textColor="@color/srp_primary_contrast" />
-
-    <TextView
-        android:id="@+id/tvStatus"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Idle"
-        android:textSize="14sp"
-        android:layout_marginTop="12dp"
-        android:padding="8dp"
-        android:background="@color/srp_surface"
-        android:textColor="@color/srp_text"
-        android:backgroundTint="@color/srp_surface" />
-
-    <TextView
-        android:id="@+id/tvBytes"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Bytes sent: 0"
-        android:textSize="12sp"
-        android:layout_marginTop="4dp"
-        android:textColor="@color/srp_text_muted" />
-
-</LinearLayout>
+</ScrollView>
