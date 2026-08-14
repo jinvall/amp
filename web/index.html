@@ -50,6 +50,7 @@
   .latency-val.over { color: #ff4d4d; }
   main { padding: 14px 18px; display: flex; flex-direction: column; gap: 14px; }
   .panel {
+    position: relative;
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 10px;
@@ -60,9 +61,15 @@
     border-bottom: 1px solid var(--color-border);
     display: flex; justify-content: space-between; align-items: center;
   }
+  .meter-strip {
+    position: absolute; top: 0; bottom: 0; width: 44px;
+    pointer-events: none;
+  }
+  .meter-strip.left { left: 0; }
+  .meter-strip.right { right: 0; }
   canvas { display: block; width: 100%; }
-  #waveform { height: 220px; }
-  #spectrogram { height: 320px; }
+  #waveform { height: 220px; padding-right: 48px; }
+  #spectrogram { height: 320px; padding-left: 48px; }
   .hint { font-size: 11px; color: var(--color-text-muted); }
   .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   select, button {
@@ -100,6 +107,7 @@
   <div class="panel">
     <div class="label"><span>Waveform</span><span class="hint">scrolling · click to freeze</span></div>
     <canvas id="waveform"></canvas>
+    <canvas id="waveMeter" class="meter-strip right"></canvas>
   </div>
   <div class="panel">
     <div class="label">
@@ -127,6 +135,7 @@
       </span>
     </div>
     <canvas id="spectrogram"></canvas>
+    <canvas id="freqMeter" class="meter-strip left"></canvas>
   </div>
 </main>
 
@@ -145,8 +154,12 @@
   // ── DOM ──
   const waveCanvas = document.getElementById('waveform');
   const specCanvas = document.getElementById('spectrogram');
+  const waveMeter = document.getElementById('waveMeter');
+  const freqMeter = document.getElementById('freqMeter');
   const wctx = waveCanvas.getContext('2d');
   const sctx = specCanvas.getContext('2d');
+  const wmctx = waveMeter.getContext('2d');
+  const fmctx = freqMeter.getContext('2d');
   const statusDot = document.getElementById('statusDot');
   const rmsVal = document.getElementById('rmsVal');
   const latVal = document.getElementById('latVal');
@@ -179,9 +192,13 @@
   }
   let waveSize = fitCanvas(waveCanvas);
   let specSize = fitCanvas(specCanvas);
+  let waveMeterSize = fitCanvas(waveMeter);
+  let freqMeterSize = fitCanvas(freqMeter);
   window.addEventListener('resize', () => {
     waveSize = fitCanvas(waveCanvas);
     specSize = fitCanvas(specCanvas);
+    waveMeterSize = fitCanvas(waveMeter);
+    freqMeterSize = fitCanvas(freqMeter);
   });
 
   // ── Colormaps (precomputed 256-entry lookup) ──
@@ -319,6 +336,31 @@
       }
       wctx.stroke();
     }
+    drawWaveMeter(h);
+  }
+
+  function drawWaveMeter(h) {
+    const { w } = waveMeterSize;
+    wmctx.clearRect(0, 0, w, h);
+    wmctx.fillStyle = '#0f0a18';
+    wmctx.fillRect(0, 0, w, h);
+    const rms = latestRms || 0;
+    const db = rms > 0 ? 20 * Math.log10(rms) : -60;
+    const pct = Math.max(0, Math.min(1, (db + 60) / 60));
+    const barH = h * pct;
+    const grad = wmctx.createLinearGradient(0, h, 0, 0);
+    grad.addColorStop(0, '#12f012');
+    grad.addColorStop(0.6, '#ffd23f');
+    grad.addColorStop(1, '#ff4d4d');
+    wmctx.fillStyle = grad;
+    wmctx.fillRect(4, h - barH, w - 8, barH);
+    wmctx.strokeStyle = '#3d2d61';
+    wmctx.strokeRect(4, 0, w - 8, h);
+    wmctx.fillStyle = '#f3f3f7';
+    wmctx.font = '10px -apple-system, sans-serif';
+    wmctx.textAlign = 'center';
+    wmctx.textBaseline = 'middle';
+    wmctx.fillText(db.toFixed(0) + ' dB', w/2, h/2);
   }
 
   function drawSpectrogram() {
@@ -341,6 +383,29 @@
         const y = (1 - i / n) * h;
         sctx.fillRect(x, y, colW + 1, h / n + 1);
       }
+    }
+    drawFreqMeter(h, n);
+  }
+
+  function drawFreqMeter(h, n) {
+    const { w, h: mh } = freqMeterSize;
+    fmctx.clearRect(0, 0, w, mh);
+    fmctx.fillStyle = '#0f0a18';
+    fmctx.fillRect(0, 0, w, mh);
+    fmctx.font = '10px -apple-system, sans-serif';
+    fmctx.fillStyle = '#c8c9d4';
+    fmctx.textAlign = 'right';
+    fmctx.textBaseline = 'middle';
+    const sr = cfg.sampleRate || 44100;
+    const nyquist = sr / 2;
+    const steps = 6;
+    for (let i = 0; i <= steps; i++) {
+      const frac = i / steps;
+      const freq = frac * nyquist;
+      const y = (1 - frac) * mh;
+      fmctx.fillText(freq >= 1000 ? (freq/1000).toFixed(1) + 'k' : Math.round(freq) + '', w - 4, y);
+      fmctx.strokeStyle = 'rgba(61,45,97,0.5)';
+      fmctx.beginPath(); fmctx.moveTo(0, y); fmctx.lineTo(w, y); fmctx.stroke();
     }
   }
 
