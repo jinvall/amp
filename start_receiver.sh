@@ -28,12 +28,14 @@ existing_pids=$(pgrep -f "amp\.py" 2>/dev/null || true)
 if [ -n "$existing_pids" ]; then
   echo "Stopping existing receiver (pid: $existing_pids)..."
   kill -TERM $existing_pids 2>/dev/null || true
-  for i in $(seq 1 50); do
-    if ! ss -tlnp 2>/dev/null | grep -qE '(:809[0-9]|:8093)'; then
-      break
-    fi
-    sleep 0.1
-  done
+  sleep 1
+  # If still around, force kill. Do not hang the startup on a stuck process.
+  still=$(pgrep -f "amp\.py" 2>/dev/null || true)
+  if [ -n "$still" ]; then
+    echo "Force-killing stuck receiver (pid: $still)..."
+    kill -KILL $still 2>/dev/null || true
+    sleep 0.5
+  fi
 fi
 
 echo "Starting AMP stack (server/amp.py)..."

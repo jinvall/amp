@@ -1,0 +1,12 @@
+KODE.md
+
+So several issues here, first, something must be done to keep things connected during run. Also, we ought to (just before startup) make sure old process is cleared and the port range is cleared. The project, both PC and Android sides, should run regardless of any issues the other is having. There should be a single way to start the project (implemented). I'm almost thinking we could "pair" the Android to the PC to simplify any IP or port debacles that could arise. When it has a critical failure, the entire program, both sides, must gracefully shutdown and offer a log for details. Speaking of logs, PLEASE do not simply PASS exceptions, that way I don't have to get cranky at 0215. Watch out with creating files and name drift, don't assume either way if something is there... look, check if it is, and if the function you are working on could be called something else... it isn't happening often, but it does. Please verify your work that it works as intended and looks and feels like it belongs, ask if not sure. Please don't overcomplicate your reasoning, instincts are only instincts until you put thought processing to them. srp theme pack exists, use it along with icons and branding (srp = Slutty Rabbit Productions). Thank you for being a part of it.
+
+Moving along with issues we are facing: we've covered the startup mostly. Now every slider on the interface has a purpose, purposes need functions. If the slider is not working, write the function and make it work. That is ALL sliders, either side where applicable. When verifying, make sure it is 100% good to go, placeholders are something I am not a fan of UNLESS NECESSARY such as a default value that MUST have a value to run. The other exception is secrets. I believe in configurability as much as possible to ensure flexibility. Do not hard code configurable values unless mandatory, so NO PLACEHOLDER for future code, and snippets are of no existent use here, we build for tomorrow, today.
+
+So... verification thoroughness. I notice some issues with dB or RMS meter locations on the UI. By the way, my name is not "the user", it is Jason or Dani, you choose.
+
+Moving on, single source of truth is no joke, it keeps things real and tight and honest. Logging is no exception. Remember, this project was contingent on a latency <300ms, so the UI graphs are looking wonderful. However, they are on the choppy side for smoothness in scrolling. I think this is more than enough for now.
+
+Thank you dearly,
+srp

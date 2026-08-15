@@ -2,5 +2,5 @@
   "amplification": 100,
   "breathing_cooldown": 2,
   "breathing_sensitivity": 80,
-  "segment_duration_min": 0
+  "segment_duration_min": 3
 }

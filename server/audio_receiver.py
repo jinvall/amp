@@ -552,6 +552,7 @@ class AudioReceiver:
         self.viz_port = viz_port
         self.viz_feed = VisualizerFeed(host=host, port=viz_port,
                                        analyzer=VisualizerAnalyzer(SAMPLE_RATE))
+        self._control_clients = set()
 
         # WAV segment config
         self._wav_output_dir = OUTPUT_DIR
@@ -568,6 +569,17 @@ class AudioReceiver:
             self.apply_config_dict(startup_cfg, persist=False)
             self._last_config_hash = _config_hash(startup_cfg)
             print(f"[{datetime.now().isoformat()}] Loaded config from {self.config_path}: {startup_cfg}")
+
+    def connection_state(self):
+        pcm = len(getattr(self, 'clients', set()))
+        ctrl = len(getattr(self, '_control_clients', set()))
+        viz = len(getattr(self.viz_feed, '_clients', set())) if self.viz_feed is not None else 0
+        return {
+            "pcm_clients": pcm,
+            "control_clients": ctrl,
+            "viz_clients": viz,
+            "android_connected": pcm > 0,
+        }
 
     def _recalculate_segment_bytes(self):
         self.step_sec = max(1, self.segment_duration_sec - self.overlap_duration_sec)
@@ -823,6 +835,7 @@ class AudioReceiver:
         Bulletproof: never lets a malformed line kill the thread or slow the receiver.
         """
         print(f"Control client connected: {addr}")
+        self._control_clients.add(conn)
         try:
             conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             conn.settimeout(0.5)
@@ -857,12 +870,11 @@ class AudioReceiver:
         except Exception as e:
             print(f"[{datetime.now().isoformat()}] Control client {addr} error: {e}")
         finally:
+            self._control_clients.discard(conn)
             try:
                 conn.close()
             except Exception as e:
                 print(f"[{datetime.now().isoformat()}] Control client {addr} close failed: {e}")
-            print(f"Control client disconnected: {addr}")
-            conn.close()
             print(f"Control client disconnected: {addr}")
 
     def _control_loop(self):
