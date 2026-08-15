@@ -17,5 +17,19 @@ PY="${PYTHON:-python3}"
 LOG_DIR="${LOG_DIR:-logs}"
 mkdir -p "$LOG_DIR"
 
+# ── Pre-flight: stop any existing receiver so ports are clean ──
+# Match the actual receiver entry point in the command line.
+existing_pids=$(pgrep -f "amp\.py" 2>/dev/null || true)
+if [ -n "$existing_pids" ]; then
+  echo "Stopping existing receiver (pid: $existing_pids)..."
+  kill -TERM $existing_pids 2>/dev/null || true
+  for i in $(seq 1 50); do
+    if ! ss -tlnp 2>/dev/null | grep -qE '(:809[0-9]|:8093)'; then
+      break
+    fi
+    sleep 0.1
+  done
+fi
+
 echo "Starting AMP stack (server/amp.py)..."
 exec "$PY" server/amp.py --host 0.0.0.0 "$@" 2>&1 | tee -a "$LOG_DIR/amp.log"
