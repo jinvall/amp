@@ -948,6 +948,9 @@ class AudioReceiver:
             self.stop()
 
     def stop(self):
+        if getattr(self, '_stopped', False):
+            return
+        self._stopped = True
         self.running = False
         for conn in list(self.clients):
             try:
