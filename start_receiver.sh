@@ -13,12 +13,17 @@ set -u
 
 cd "$(dirname "$0")"
 
-PY="${PYTHON:-python3}"
+# Always use the project venv Python; do not fall back to system python3.
+PY="$(cd server && pwd)/venv/bin/python"
+if [ ! -x "$PY" ]; then
+  echo "ERROR: venv Python not found at $PY" >&2
+  exit 1
+fi
+
 LOG_DIR="${LOG_DIR:-logs}"
 mkdir -p "$LOG_DIR"
 
 # ── Pre-flight: stop any existing receiver so ports are clean ──
-# Match the actual receiver entry point in the command line.
 existing_pids=$(pgrep -f "amp\.py" 2>/dev/null || true)
 if [ -n "$existing_pids" ]; then
   echo "Stopping existing receiver (pid: $existing_pids)..."
