@@ -489,7 +489,9 @@ class VisualizerFeed:
         async def broadcast_loop():
             while self.running:
                 try:
-                    f = await self._out_queue.get()
+                    f = await asyncio.wait_for(self._out_queue.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
                 except Exception as e:
                     print(f"[{datetime.now().isoformat()}] viz_broadcast: queue get failed: {e}")
                     await asyncio.sleep(0.01)
@@ -694,6 +696,7 @@ class AudioReceiver:
         try:
             conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 131072)
+            conn.settimeout(0.5)
             # Read optional initial config line (returns audio bytes that arrived
             # coalesced after the config newline so we never drop leading PCM).
             config, leftover = self._read_config(conn)
@@ -718,7 +721,13 @@ class AudioReceiver:
 
             # Receive audio stream
             while self.running:
-                chunk = conn.recv(65536)
+                try:
+                    chunk = conn.recv(65536)
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    print(f"[{datetime.now().isoformat()}] Client {addr} recv error: {e}")
+                    break
                 if not chunk:
                     break
                 if self.bytes_since_last_segment % (BYTES_PER_SECOND * 5) < len(chunk):
@@ -732,9 +741,12 @@ class AudioReceiver:
                     except Exception as e:
                         print(f"[{datetime.now().isoformat()}] client_queue: dropped PCM chunk: {e}")
         except Exception as e:
-            print(f"Client {addr} error: {e}")
+            print(f"[{datetime.now().isoformat()}] Client {addr} error: {e}")
         finally:
-            conn.close()
+            try:
+                conn.close()
+            except Exception as e:
+                print(f"[{datetime.now().isoformat()}] Client {addr} close failed: {e}")
             self.clients.discard(conn)
             print(f"Client disconnected: {addr}")
 
@@ -813,9 +825,16 @@ class AudioReceiver:
         print(f"Control client connected: {addr}")
         try:
             conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            conn.settimeout(0.5)
             buffer = bytearray()
             while self.running:
-                chunk = conn.recv(4096)
+                try:
+                    chunk = conn.recv(4096)
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    print(f"[{datetime.now().isoformat()}] Control client {addr} recv error: {e}")
+                    break
                 if not chunk:
                     break
                 buffer.extend(chunk)
@@ -838,6 +857,11 @@ class AudioReceiver:
         except Exception as e:
             print(f"[{datetime.now().isoformat()}] Control client {addr} error: {e}")
         finally:
+            try:
+                conn.close()
+            except Exception as e:
+                print(f"[{datetime.now().isoformat()}] Control client {addr} close failed: {e}")
+            print(f"Control client disconnected: {addr}")
             conn.close()
             print(f"Control client disconnected: {addr}")
 
@@ -848,6 +872,7 @@ class AudioReceiver:
             self.control_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.control_socket.bind((self.host, self.control_port))
             self.control_socket.listen(5)
+            self.control_socket.settimeout(0.5)
             print(f"Control (live config) listening on {self.host}:{self.control_port}")
         except Exception as e:
             print(f"[{datetime.now().isoformat()}] Could not start control port {CONTROL_PORT}: {e}")
@@ -858,6 +883,8 @@ class AudioReceiver:
                     conn, addr = self.control_socket.accept()
                     t = threading.Thread(target=self._handle_control_client, args=(conn, addr), daemon=True)
                     t.start()
+                except socket.timeout:
+                    continue
                 except OSError:
                     if not self.running:
                         break
@@ -890,6 +917,7 @@ class AudioReceiver:
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.bind((self.host, self.port))
         self.server_socket.listen(5)
+        self.server_socket.settimeout(0.5)
         print(f"Audio receiver listening on {self.host}:{self.port}")
         print(f"Segment: {self.segment_duration_sec}s, Overlap: {self.overlap_duration_sec}s, Step: {self.step_sec}s")
         print(f"Max storage: {MAX_STORAGE_SECONDS}s (~1 hour)")
@@ -911,6 +939,8 @@ class AudioReceiver:
                     conn, addr = self.server_socket.accept()
                     t = threading.Thread(target=self._handle_client, args=(conn, addr), daemon=True)
                     t.start()
+                except socket.timeout:
+                    continue
                 except OSError:
                     if not self.running:
                         break
