@@ -59,19 +59,22 @@
   .panel .label {
     padding: 8px 12px; font-size: 12px; color: var(--color-text-muted);
     border-bottom: 1px solid var(--color-border);
-    display: flex; justify-content: space-between; align-items: center;
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
   }
   .meter-strip {
-    position: absolute; top: 0; bottom: 0; width: 44px;
-    pointer-events: none;
+    position: absolute; top: 0; bottom: 0; width: 48px;
+    pointer-events: none; z-index: 2;
   }
   .meter-strip.left { left: 0; }
   .meter-strip.right { right: 0; }
   canvas { display: block; width: 100%; }
-  #waveform { height: 220px; padding-right: 48px; }
-  #spectrogram { height: 320px; padding-left: 48px; }
+  #waveform { height: 220px; padding-right: 52px; }
+  #spectrogram { height: 320px; padding-left: 52px; }
   .hint { font-size: 11px; color: var(--color-text-muted); }
   .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .buffer-control { display: inline-flex; align-items: center; gap: 6px; }
+  .buffer-control input[type=range] { width: 90px; }
+  .buffer-control .val { min-width: 36px; text-align: right; font-variant-numeric: tabular-nums; }
   select, button {
     background: var(--color-bg); color: var(--color-text);
     border: 1px solid var(--color-border); border-radius: 6px;
@@ -105,7 +108,14 @@
 
 <main>
   <div class="panel">
-    <div class="label"><span>Waveform</span><span class="hint">scrolling · click to freeze</span></div>
+    <div class="label">
+      <span>Waveform</span>
+      <span class="hint">scrolling · click to freeze</span>
+      <label class="hint buffer-control">ring
+        <input id="waveBuffer" type="range" min="60" max="1200" step="10" value="600" />
+        <span class="val" id="waveBufferVal">600</span>
+      </label>
+    </div>
     <canvas id="waveform"></canvas>
     <canvas id="waveMeter" class="meter-strip right"></canvas>
   </div>
@@ -131,6 +141,10 @@
             <option value="black">black</option>
             <option value="kalman">kalman</option>
           </select>
+        </label>
+        <label class="hint buffer-control">ring
+          <input id="specBuffer" type="range" min="40" max="800" step="10" value="400" />
+          <span class="val" id="specBufferVal">400</span>
         </label>
       </span>
     </div>
@@ -171,14 +185,81 @@
   budgetVal.textContent = 'budget ' + cfg.budgetMs.toFixed(0) + 'ms';
 
   // ── Ring buffers ──
-  const WAVE_HISTORY = 600;   // ~12 s of frames at 50fps
-  const SPEC_HISTORY = 400;   // ~8 s of spectrogram columns
-  let waveHistory = [];       // array of Float32Array(waveformPoints)
-  let specHistory = [];       // array of Float32Array(spectrogramBins)
+  const WAVE_HISTORY_DEFAULT = 600;
+  const SPEC_HISTORY_DEFAULT = 400;
+
+  function createRingBuffer(capacity) {
+    const buf = new Array(capacity);
+    for (let i = 0; i < capacity; i++) buf[i] = null;
+    return { cap: capacity, n: 0, head: 0, data: buf };
+  }
+  function ringPush(rb, item) {
+    if (rb.n < rb.cap) {
+      rb.data[(rb.head + rb.n) % rb.cap] = item;
+      rb.n += 1;
+    } else {
+      rb.data[rb.head] = item;
+      rb.head = (rb.head + 1) % rb.cap;
+    }
+  }
+  function ringItem(rb, idx) {
+    if (idx >= rb.n) return null;
+    const i = (rb.head + idx) % rb.cap;
+    return rb.data[i];
+  }
+  function ringLen(rb) { return rb.n; }
+
+  let waveRb = createRingBuffer(WAVE_HISTORY_DEFAULT);
+  let specRb = createRingBuffer(SPEC_HISTORY_DEFAULT);
   let latestRms = 0;
   let frozen = false;
 
   waveCanvas.addEventListener('click', () => { frozen = !frozen; });
+
+  // Buffer size controls
+  const waveBufferInput = document.getElementById('waveBuffer');
+  const waveBufferVal = document.getElementById('waveBufferVal');
+  const specBufferInput = document.getElementById('specBuffer');
+  const specBufferVal = document.getElementById('specBufferVal');
+
+  function setWaveBufferSize(n) {
+    n = Math.max(10, Math.min(1200, n));
+    const newRb = createRingBuffer(n);
+    const old = waveRb;
+    const copyCount = Math.min(ringLen(old), n);
+    for (let i = 0; i < copyCount; i++) {
+      newRb.data[i] = ringItem(old, i);
+    }
+    newRb.n = copyCount;
+    newRb.head = 0;
+    waveRb = newRb;
+    if (waveBufferInput) waveBufferInput.value = n;
+    if (waveBufferVal) waveBufferVal.textContent = String(n);
+  }
+  function setSpecBufferSize(n) {
+    n = Math.max(10, Math.min(800, n));
+    const newRb = createRingBuffer(n);
+    const old = specRb;
+    const copyCount = Math.min(ringLen(old), n);
+    for (let i = 0; i < copyCount; i++) {
+      newRb.data[i] = ringItem(old, i);
+    }
+    newRb.n = copyCount;
+    newRb.head = 0;
+    specRb = newRb;
+    if (specBufferInput) specBufferInput.value = n;
+    if (specBufferVal) specBufferVal.textContent = String(n);
+  }
+  if (waveBufferInput) {
+    waveBufferInput.value = String(WAVE_HISTORY_DEFAULT);
+    if (waveBufferVal) waveBufferVal.textContent = String(WAVE_HISTORY_DEFAULT);
+    waveBufferInput.addEventListener('input', () => setWaveBufferSize(parseInt(waveBufferInput.value, 10) || WAVE_HISTORY_DEFAULT));
+  }
+  if (specBufferInput) {
+    specBufferInput.value = String(SPEC_HISTORY_DEFAULT);
+    if (specBufferVal) specBufferVal.textContent = String(SPEC_HISTORY_DEFAULT);
+    specBufferInput.addEventListener('input', () => setSpecBufferSize(parseInt(specBufferInput.value, 10) || SPEC_HISTORY_DEFAULT));
+  }
 
   // ── HiDPI canvas sizing ──
   function fitCanvas(canvas) {
@@ -275,13 +356,11 @@
         return;
       }
       // analysis frame
-      const wave = Float32Array.from(msg.wave);
-      const spec = Float32Array.from(msg.spec);
+      const wave = new Float32Array(msg.wave);
+      const spec = new Float32Array(msg.spec);
       if (!frozen) {
-        waveHistory.push(wave);
-        if (waveHistory.length > WAVE_HISTORY) waveHistory.shift();
-        specHistory.push(spec);
-        if (specHistory.length > SPEC_HISTORY) specHistory.shift();
+        ringPush(waveRb, wave);
+        ringPush(specRb, spec);
       }
       latestRms = msg.rms || 0;
       lastServerTs = msg.t;
@@ -311,22 +390,36 @@
   });
 
   // ── Drawing ──
+  let lastDrawnWaveLen = 0;
+  let lastDrawnSpecLen = 0;
+
   function drawWaveform() {
     const { w, h } = waveSize;
-    wctx.clearRect(0, 0, w, h);
+    const n = cfg.waveformPoints;
+    const cap = waveRb.cap;
+    const colW = w / cap;
+    const historyLen = ringLen(waveRb);
+    const oldestIdx = Math.max(0, historyLen - cap);
+    const visibleCount = historyLen - oldestIdx;
+
     wctx.fillStyle = '#0f0a18';
     wctx.fillRect(0, 0, w, h);
-    // midline
     wctx.strokeStyle = 'rgba(61,45,97,0.6)';
     wctx.lineWidth = 1;
     wctx.beginPath(); wctx.moveTo(0, h / 2); wctx.lineTo(w, h / 2); wctx.stroke();
 
-    if (waveHistory.length === 0) return;
-    const n = cfg.waveformPoints;
-    const colW = w / WAVE_HISTORY;
-    for (let f = 0; f < waveHistory.length; f++) {
-      const buf = waveHistory[f];
-      const x = f * colW;
+    if (visibleCount === 0) {
+      lastDrawnWaveLen = 0;
+      drawWaveMeter(h);
+      return;
+    }
+
+    const oldestVisibleIdx = oldestIdx;
+    for (let f = oldestVisibleIdx; f < historyLen; f++) {
+      const buf = ringItem(waveRb, f);
+      if (!buf) continue;
+      const framePos = f - oldestVisibleIdx;
+      const x = framePos * colW;
       wctx.strokeStyle = 'rgba(0,209,255,0.85)';
       wctx.beginPath();
       for (let i = 0; i < n; i++) {
@@ -336,14 +429,16 @@
       }
       wctx.stroke();
     }
+    lastDrawnWaveLen = visibleCount;
     drawWaveMeter(h);
   }
 
   function drawWaveMeter(h) {
     const { w } = waveMeterSize;
-    wmctx.clearRect(0, 0, w, h);
+    const mw = Math.max(1, w);
+    wmctx.clearRect(0, 0, mw, h);
     wmctx.fillStyle = '#0f0a18';
-    wmctx.fillRect(0, 0, w, h);
+    wmctx.fillRect(0, 0, mw, h);
     const rms = latestRms || 0;
     const db = rms > 0 ? 20 * Math.log10(rms) : -60;
     const pct = Math.max(0, Math.min(1, (db + 60) / 60));
@@ -353,37 +448,50 @@
     grad.addColorStop(0.6, '#ffd23f');
     grad.addColorStop(1, '#ff4d4d');
     wmctx.fillStyle = grad;
-    wmctx.fillRect(4, h - barH, w - 8, barH);
+    wmctx.fillRect(4, h - barH, mw - 8, barH);
     wmctx.strokeStyle = '#3d2d61';
-    wmctx.strokeRect(4, 0, w - 8, h);
+    wmctx.strokeRect(4, 0, mw - 8, h);
     wmctx.fillStyle = '#f3f3f7';
     wmctx.font = '10px -apple-system, sans-serif';
     wmctx.textAlign = 'center';
     wmctx.textBaseline = 'middle';
-    wmctx.fillText(db.toFixed(0) + ' dB', w/2, h/2);
+    wmctx.fillText(db.toFixed(0) + ' dB', mw / 2, h / 2);
   }
 
   function drawSpectrogram() {
     const { w, h } = specSize;
-    // shift existing image left by one column width, then draw newest column on right
     const n = cfg.spectrogramBins;
-    const colW = w / SPEC_HISTORY;
-    // We redraw fully (cheap enough at these sizes); scrolling illusion via history order.
+    const cap = specRb.cap;
+    const colW = w / cap;
+    const historyLen = ringLen(specRb);
+    const oldestIdx = Math.max(0, historyLen - cap);
+    const visibleCount = historyLen - oldestIdx;
+
     sctx.clearRect(0, 0, w, h);
     sctx.fillStyle = '#0f0a18';
     sctx.fillRect(0, 0, w, h);
-    for (let f = 0; f < specHistory.length; f++) {
-      const buf = specHistory[f];
-      const x = f * colW;
+
+    if (visibleCount === 0) {
+      lastDrawnSpecLen = 0;
+      drawFreqMeter(h, n);
+      return;
+    }
+
+    const oldestVisibleIdx = oldestIdx;
+    for (let f = oldestVisibleIdx; f < historyLen; f++) {
+      const buf = ringItem(specRb, f);
+      if (!buf) continue;
+      const framePos = f - oldestVisibleIdx;
+      const x = framePos * colW;
       for (let i = 0; i < n; i++) {
         const v = buf[i];
         const idx = Math.max(0, Math.min(255, Math.round(v * 255)));
         sctx.fillStyle = colormap[idx];
-        // y: low freq at bottom
         const y = (1 - i / n) * h;
         sctx.fillRect(x, y, colW + 1, h / n + 1);
       }
     }
+    lastDrawnSpecLen = visibleCount;
     drawFreqMeter(h, n);
   }
 
