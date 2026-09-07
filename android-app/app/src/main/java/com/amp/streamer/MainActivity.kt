@@ -47,6 +47,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Keep the screen on while this Activity is in the foreground so the web
+        // visualizer's requestAnimationFrame isn't throttled when the device's
+        // screen would otherwise time out. Without this, the waveform and
+        // spectrogram stop drawing when the screen turns off even though audio
+        // streaming continues in the foreground service.
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 

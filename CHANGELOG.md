@@ -257,3 +257,30 @@ now-working UI. Flagged, not done.
 - `drawWaveformFull` / `drawSpectrogramFull` exist and iterate visible
   history from `oldestIdx` to `historyLen`, drawing each frame column at
   `framePos * colW` across the card width.
+
+## 2026-09-06 (session: mic source expansion + screen-timeout render fix)
+### Added
+- **3.5mm jack/headset and USB mic options in the Android mic dropdown.**
+  `AudioStreamerService.AUDIO_SOURCES` now includes:
+  - `WIRED_HEADSET` (value 24, `AudioSource.WIRED_HEADSET`, API 33+) →
+    "3.5mm Jack / Headset Mic"
+  - `USB` (value 25, `AudioSource.USB`, API 33+) → "USB Microphone"
+  - `VOICE_COMMUNICATION` (value 7) → "Voice Communication"
+  Both new constants use raw integer values so the app compiles on all API
+  levels; on pre-API-33 devices the `AudioRecord` constructor throws and the
+  auto-priority list falls through to the next source. The auto-priority list
+  in `startStreaming()` now tries WIRED_HEADSET and USB before Bluetooth SCO,
+  so a connected external device is picked up automatically without manual
+  selection. Wired headset sources also get the same 44.1/16/8 kHz rate
+  fallback as Bluetooth SCO.
+
+### Fixed
+- **Waveform + spectrogram stop drawing when the Android device screen times
+  out.** `MainActivity.onCreate()` now sets
+  `FLAG_KEEP_SCREEN_ON` so the screen stays on while the app is in the
+  foreground, preventing the browser's `requestAnimationFrame` from being
+  throttled to ~1fps or paused entirely. Additionally, `web/index.html`
+  `loop()` was changed from `requestAnimationFrame` to a `setTimeout`-based
+  render loop at ~30fps — `setTimeout` fires even when the tab is hidden or
+  the device screen is off, so the graphs continue rendering as a
+  belt-and-suspenders fix.

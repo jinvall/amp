@@ -659,16 +659,33 @@
     else latVal.className = 'latency-val over';
   }
 
-  function loop() {
-    // Skip drawing a disabled graph entirely: its ring is already dumped (see
-    // onmessage) so there is nothing to render, and skipping saves CPU on the
-    // mini PC. The last frame stays frozen on screen until re-enabled.
+  // Render loop with screen-timeout survival.
+  // requestAnimationFrame is throttled or paused entirely by browsers when the
+  // device screen times out or the tab is hidden. The WebSocket feed keeps
+  // delivering frames and the ring buffers keep filling, but the canvas never
+  // repaints so the waveform + spectrogram stop drawing. We use a setTimeout-
+  // based loop (~30fps) instead of requestAnimationFrame so rendering continues
+  // even when the screen is off or the tab is hidden. 30fps is sufficient for
+  // real-time audio visualization and is not subject to the same throttling.
+  let lastDrawTs = 0;
+  let renderTimer = null;
+
+  function drawOnce() {
+    // Guard: skip if we drew in the last 16ms (prevents double-draw).
+    const now = performance.now();
+    if (now - lastDrawTs < 16) return;
+    lastDrawTs = now;
     if (graphActive.wave) drawWaveform();
     if (graphActive.spec) drawSpectrogram();
     updateMeters();
-    requestAnimationFrame(loop);
   }
-  requestAnimationFrame(loop);
+
+  function renderStep() {
+    drawOnce();
+    renderTimer = setTimeout(renderStep, 33);  // ~30fps
+  }
+
+  renderTimer = setTimeout(renderStep, 0);
 
   // Auto-connect using current host + default viz port if no URL provided.
   if (!wsUrlInput.value) {

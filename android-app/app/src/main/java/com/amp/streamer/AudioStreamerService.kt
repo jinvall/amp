@@ -39,6 +39,14 @@ class AudioStreamerService : Service() {
         // auto-selection priority by picking a specific source here.
         // BLUETOOTH_SCO = 6 (raw value; constant may not resolve on all SDK configs)
         val BLUETOOTH_SCO = 6
+        // WIRED_HEADSET (3.5mm jack) and USB are API 33 (Android 13) constants.
+        // We reference the raw integer values so the app still compiles on lower
+        // API levels where the named constant doesn't exist. If the device is
+        // below API 33 the AudioRecord constructor will throw and we skip to the
+        // next source in the auto-priority list.
+        val WIRED_HEADSET = 24   // MediaRecorder.AudioSource.WIRED_HEADSET (API 33+)
+        val USB = 25             // MediaRecorder.AudioSource.USB (API 33+)
+        val VOICE_COMMUNICATION = 7  // MediaRecorder.AudioSource.VOICE_COMMUNICATION
         val AUDIO_SOURCES = mapOf(
             -1 to "Auto (Recommended)",
             MediaRecorder.AudioSource.UNPROCESSED to "Unprocessed (Raw)",
@@ -46,6 +54,9 @@ class AudioStreamerService : Service() {
             MediaRecorder.AudioSource.CAMCORDER to "Camcorder",
             MediaRecorder.AudioSource.MIC to "Default Mic",
             BLUETOOTH_SCO to "Bluetooth Mic (SCO)",
+            WIRED_HEADSET to "3.5mm Jack / Headset Mic",
+            USB to "USB Microphone",
+            VOICE_COMMUNICATION to "Voice Communication",
             MediaRecorder.AudioSource.DEFAULT to "System Default",
         )
     }
@@ -179,9 +190,14 @@ class AudioStreamerService : Service() {
         // Audio source selection: if the user picked a specific source, try it
         // first; otherwise fall back to the auto-priority list. Auto mode tries
         // raw/less-processed sources first for better quiet-signal pickup.
+        // Wired headset and USB mic are tried in the auto list so a connected
+        // external device is picked up automatically without manual selection.
         val autoSources = arrayOf(
             MediaRecorder.AudioSource.UNPROCESSED,
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            WIRED_HEADSET,
+            USB,
+            VOICE_COMMUNICATION,
             BLUETOOTH_SCO,
             MediaRecorder.AudioSource.CAMCORDER,
             MediaRecorder.AudioSource.MIC,
@@ -198,10 +214,11 @@ class AudioStreamerService : Service() {
         audioRecord = null
         var selectedSourceName = "none"
         for (source in sources) {
-            // Bluetooth SCO mics (earbuds, headsets) typically only support 8 or 16 kHz.
-            // Try the standard 44.1 kHz first; if that fails and the source is BT, fall
-            // back to 16 kHz which is the most common SCO rate.
-            val sampleRates = if (source == BLUETOOTH_SCO) intArrayOf(44100, 16000, 8000) else intArrayOf(44100)
+            // Bluetooth SCO and wired headset mics (earbuds, headsets, 3.5mm jack)
+            // typically only support 8 or 16 kHz. Try the standard 44.1 kHz first;
+            // if that fails, fall back to 16 kHz then 8 kHz.
+            val sampleRates = if (source == BLUETOOTH_SCO || source == WIRED_HEADSET)
+                intArrayOf(44100, 16000, 8000) else intArrayOf(44100)
             for (sr in sampleRates) {
                 try {
                     android.util.Log.d("AudioStreamer", "Trying audio source: $source @ ${sr}Hz")
