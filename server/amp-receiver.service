@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=simple
 # Run from the project root so config.json / audio_segments resolve relative to CWD.
 WorkingDirectory=/home/jason/amp
-ExecStart=/usr/bin/env python3 /home/jason/amp/server/amp.py --host 0.0.0.0
+ExecStart=/home/jason/amp/start_receiver.sh
 # If the launcher (or either child) dies, restart. The audio path is the critical one.
 Restart=always
 RestartSec=2

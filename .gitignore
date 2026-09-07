@@ -20,6 +20,8 @@ android-app/local.properties
 
 # Audio segments
 server/audio_segments/
+audio_segments/
+audio_stems/
 *.mp3
 *.mp4
 
@@ -42,3 +44,20 @@ local-config.properties
 local-config.json
 .env
 *.env
+
+# Virtual environments
+audio-separator-env/
+basic-pitch-venv/
+server/basic-pitch-venv/
+
+# Untracked docs / backups
+web/0.html
+web/GRAPH_RENDERING_FIXES.md
+web/index.html.backup
+web/index.html.broken-*
+
+# Kilo internal
+.kilo/worktrees/
+
+# Quarantine
+quarantine/

@@ -1,2 +1,7 @@
 numpy>=1.24.0
 websockets>=11.0.0
+
+# Optional: real ML-based separation (CPU-capable).
+# Install only if you want actual source separation instead of the default
+# frequency-band split. Requires ~1-2GB disk and slower than real-time on CPU.
+ demucs>=4.0.0

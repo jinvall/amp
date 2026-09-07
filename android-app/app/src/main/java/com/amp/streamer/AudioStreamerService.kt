@@ -30,9 +30,24 @@ class AudioStreamerService : Service() {
         const val EXTRA_BREATHING_COOLDOWN = "breathing_cooldown"
         const val EXTRA_SEGMENT_DURATION = "segment_duration"
         const val EXTRA_NOISE_GATE = "noise_gate"
+        const val EXTRA_AUDIO_SOURCE = "audio_source"
         const val NOTIFICATION_ID = 1
         const val CHANNEL_ID = "audio_streamer_channel"
         const val CONTROL_PORT = 8091
+
+        // Audio source choices: id -> display name. The user can override the
+        // auto-selection priority by picking a specific source here.
+        // BLUETOOTH_SCO = 6 (raw value; constant may not resolve on all SDK configs)
+        val BLUETOOTH_SCO = 6
+        val AUDIO_SOURCES = mapOf(
+            -1 to "Auto (Recommended)",
+            MediaRecorder.AudioSource.UNPROCESSED to "Unprocessed (Raw)",
+            MediaRecorder.AudioSource.VOICE_RECOGNITION to "Voice Recognition",
+            MediaRecorder.AudioSource.CAMCORDER to "Camcorder",
+            MediaRecorder.AudioSource.MIC to "Default Mic",
+            BLUETOOTH_SCO to "Bluetooth Mic (SCO)",
+            MediaRecorder.AudioSource.DEFAULT to "System Default",
+        )
     }
 
     inner class StreamerBinder : Binder() {
@@ -55,13 +70,16 @@ class AudioStreamerService : Service() {
     private val eqBands: FloatArray = floatArrayOf(0f, 0f, 0f, 0f, 0f)
     private var breathingSensitivity: Double = 100.0
     private var breathingCooldown: Double = 1.0
-    private var segmentDurationSec: Int = 5
-    private var noiseGate: Int = 0
+        private var segmentDurationSec: Int = 5
+        private var noiseGate: Int = 0
+        private var audioSource: Int = -1  // -1 = auto, otherwise a specific AudioSource id
 
     private var audioRecord: AudioRecord? = null
     private var streamThread: Thread? = null
+    private var producerThread: Thread? = null
     private var socket: java.net.Socket? = null
     private var connectThread: Thread? = null
+    private var bluetoothScoActive = false  // true while we forced BT SCO routing
 
     @Volatile
     var lastRmsIn: Double = 0.0
@@ -99,6 +117,7 @@ class AudioStreamerService : Service() {
             breathingCooldown = it.getDoubleExtra(EXTRA_BREATHING_COOLDOWN, breathingCooldown)
             segmentDurationSec = it.getIntExtra(EXTRA_SEGMENT_DURATION, segmentDurationSec)
             noiseGate = it.getIntExtra(EXTRA_NOISE_GATE, noiseGate)
+            audioSource = it.getIntExtra(EXTRA_AUDIO_SOURCE, audioSource)
         }
         // Clamp current amplification to the selected ceiling
         amplification = min(amplification, amplificationCeiling)
@@ -146,6 +165,9 @@ class AudioStreamerService : Service() {
 
     fun startStreaming() {
         if (isStreaming) return
+        // Cancel any pending auto-reconnect; we are (re)starting deliberately now.
+        reconnectRunnable?.let { reconnectHandler.removeCallbacks(it) }
+        reconnectRunnable = null
 
         val sampleRate = 44100
         val channelConfig = AudioFormat.CHANNEL_IN_MONO
@@ -154,35 +176,51 @@ class AudioStreamerService : Service() {
         val minBufSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
         val audioRecordBufferSize = max(minBufSize, 65536)
 
-        // Try multiple audio sources to find one that works
-        // Priority: raw/less-processed first for better quiet-signal pickup
-        val sources = arrayOf(
+        // Audio source selection: if the user picked a specific source, try it
+        // first; otherwise fall back to the auto-priority list. Auto mode tries
+        // raw/less-processed sources first for better quiet-signal pickup.
+        val autoSources = arrayOf(
             MediaRecorder.AudioSource.UNPROCESSED,
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            BLUETOOTH_SCO,
             MediaRecorder.AudioSource.CAMCORDER,
             MediaRecorder.AudioSource.MIC,
             MediaRecorder.AudioSource.DEFAULT
         )
 
+        // Build the try order: user-selected source first (if not auto), then auto list.
+        val sources: List<Int> = if (audioSource >= 0) {
+            listOf(audioSource) + autoSources.filter { it != audioSource }
+        } else {
+            autoSources.toList()
+        }
+
         audioRecord = null
         var selectedSourceName = "none"
         for (source in sources) {
-            try {
-                android.util.Log.d("AudioStreamer", "Trying audio source: $source")
-                val testRecord = AudioRecord(source, sampleRate, channelConfig, audioFormat, audioRecordBufferSize)
-                if (testRecord.state == AudioRecord.STATE_INITIALIZED) {
-                    android.util.Log.d("AudioStreamer", "Audio source $source initialized successfully")
-                    testRecord.release()
-                    audioRecord = AudioRecord(source, sampleRate, channelConfig, audioFormat, audioRecordBufferSize)
-                    selectedSourceName = source.toString()
-                    break
-                } else {
-                    android.util.Log.w("AudioStreamer", "Audio source $source failed to initialize")
-                    testRecord.release()
+            // Bluetooth SCO mics (earbuds, headsets) typically only support 8 or 16 kHz.
+            // Try the standard 44.1 kHz first; if that fails and the source is BT, fall
+            // back to 16 kHz which is the most common SCO rate.
+            val sampleRates = if (source == BLUETOOTH_SCO) intArrayOf(44100, 16000, 8000) else intArrayOf(44100)
+            for (sr in sampleRates) {
+                try {
+                    android.util.Log.d("AudioStreamer", "Trying audio source: $source @ ${sr}Hz")
+                    val testRecord = AudioRecord(source, sr, channelConfig, audioFormat, audioRecordBufferSize)
+                    if (testRecord.state == AudioRecord.STATE_INITIALIZED) {
+                        android.util.Log.d("AudioStreamer", "Audio source $source initialized @ ${sr}Hz")
+                        testRecord.release()
+                        audioRecord = AudioRecord(source, sr, channelConfig, audioFormat, audioRecordBufferSize)
+                        selectedSourceName = AUDIO_SOURCES[source] ?: source.toString()
+                        break
+                    } else {
+                        android.util.Log.w("AudioStreamer", "Audio source $source failed @ ${sr}Hz")
+                        testRecord.release()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("AudioStreamer", "Audio source $source error @ ${sr}Hz", e)
                 }
-            } catch (e: Exception) {
-                android.util.Log.e("AudioStreamer", "Audio source $source error", e)
             }
+            if (audioRecord != null) break
         }
 
         if (audioRecord == null || audioRecord!!.state != AudioRecord.STATE_INITIALIZED) {
@@ -191,6 +229,13 @@ class AudioStreamerService : Service() {
             return
         }
         android.util.Log.i("AudioStreamer", "Selected audio source: $selectedSourceName")
+
+        // Bluetooth SCO requires explicit audio routing. Just creating an
+        // AudioRecord with BLUETOOTH_SCO source is not enough — Android keeps
+        // routing through the phone mic until we request the SCO connection.
+        if (audioSource == BLUETOOTH_SCO) {
+            startBluetoothSco()
+        }
 
         // Try to disable automatic gain control and noise suppression
         // so we get the rawest possible signal for software amplification.
@@ -287,22 +332,32 @@ class AudioStreamerService : Service() {
         val queue = ArrayBlockingQueue<ByteArray>(50)
         val amplifiedBuffer = ByteArray(bufferSize)
 
-        val producer = Thread {
+        Thread {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
             val buffer = ByteArray(bufferSize)
-            while (isStreaming && audioRecord != null) {
-                val read = audioRecord!!.read(buffer, 0, buffer.size)
-                if (read > 0) {
-                    val chunk = buffer.copyOf(read)
-                    if (!queue.offer(chunk)) {
-                        queue.poll()
-                        queue.offer(chunk)
+            try {
+                while (isStreaming && audioRecord != null) {
+                    val read = audioRecord!!.read(buffer, 0, buffer.size)
+                    if (read > 0) {
+                        val chunk = buffer.copyOf(read)
+                        if (!queue.offer(chunk)) {
+                            queue.poll()
+                            queue.offer(chunk)
+                        }
+                    } else if (read < 0) {
+                        android.util.Log.e("AudioStreamer", "AudioRecord read error: $read")
+                        onStreamFailed()
+                        return@Thread
                     }
-                } else if (read < 0) {
-                    android.util.Log.e("AudioStreamer", "AudioRecord read error: $read")
                 }
+            } catch (e: Exception) {
+                // AudioRecord/read failure (e.g. device unplugged). Tear down and
+                // reconnect rather than crash the foreground service.
+                android.util.Log.e("AudioStreamer", "Producer error", e)
+                onStreamFailed()
+                return@Thread
             }
-        }.also { it.start() }
+        }.also { producerThread = it; it.start() }
 
         streamThread = Thread {
             val socketOutputStream = socket?.getOutputStream()
@@ -334,13 +389,11 @@ class AudioStreamerService : Service() {
                 }
             } catch (e: java.io.IOException) {
                 android.util.Log.e("AudioStreamer", "Stream write error (broken pipe?)", e)
-                isStreaming = false
-                scheduleReconnect()
+                onStreamFailed()
                 return@Thread
             } catch (e: Exception) {
                 android.util.Log.e("AudioStreamer", "Stream unexpected error", e)
-                isStreaming = false
-                scheduleReconnect()
+                onStreamFailed()
                 return@Thread
             } finally {
                 try {
@@ -355,19 +408,16 @@ class AudioStreamerService : Service() {
 
     fun stopStreaming() {
         isStreaming = false
+        // Cancel any pending reconnect so a stopped service stays stopped.
+        reconnectRunnable?.let { reconnectHandler.removeCallbacks(it) }
+        reconnectRunnable = null
         streamThread?.interrupt()
         streamThread = null
 
         connectThread?.interrupt()
         connectThread = null
 
-        try {
-            audioRecord?.stop()
-            audioRecord?.release()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        audioRecord = null
+        cleanupRecording()
 
         try {
             socket?.close()
@@ -380,15 +430,73 @@ class AudioStreamerService : Service() {
         stopSelf()
     }
 
-    private fun scheduleReconnect() {
+    /**
+     * Full teardown of the capture/encode pipeline resources. Safe to call on a
+     * stream error (before reconnect) and on user stop. Idempotent.
+     */
+    private fun cleanupRecording() {
+        stopBluetoothSco()
+        producerThread?.let { try { it.interrupt() } catch (_: Exception) {} }
+        producerThread = null
+        try { audioRecord?.stop() } catch (_: Exception) {}
+        try { audioRecord?.release() } catch (_: Exception) {}
+        audioRecord = null
+    }
+
+    /**
+     * Force audio routing through a connected Bluetooth SCO device (earbuds,
+     * headset). Without this, AudioRecord with BLUETOOTH_SCO source still
+     * captures from the phone's built-in mic. Requires BLUETOOTH_CONNECT
+     * permission on Android 12+ (handled by the manifest).
+     */
+    private fun startBluetoothSco() {
+        val am = getSystemService(AudioManager::class.java) ?: return
         try {
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                android.util.Log.d("AudioStreamer", "Attempting reconnect after stream error...")
-                startStreaming()
-            }, 1000)
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            am.isBluetoothScoOn = true
+            am.startBluetoothSco()
+            bluetoothScoActive = true
+            android.util.Log.i("AudioStreamer", "Bluetooth SCO routing started")
         } catch (e: Exception) {
-            android.util.Log.e("AudioStreamer", "Failed to schedule reconnect", e)
+            android.util.Log.e("AudioStreamer", "Failed to start Bluetooth SCO", e)
         }
+    }
+
+    private fun stopBluetoothSco() {
+        if (!bluetoothScoActive) return
+        val am = getSystemService(AudioManager::class.java) ?: return
+        try {
+            am.stopBluetoothSco()
+            am.isBluetoothScoOn = false
+            am.mode = AudioManager.MODE_NORMAL
+            android.util.Log.i("AudioStreamer", "Bluetooth SCO routing stopped")
+        } catch (e: Exception) {
+            android.util.Log.e("AudioStreamer", "Failed to stop Bluetooth SCO", e)
+        }
+        bluetoothScoActive = false
+    }
+
+    /**
+     * Single failure path: stop the pipeline, then schedule exactly one reconnect.
+     * Idempotent — calling it twice won't spawn two reconnect timers.
+     */
+    private fun onStreamFailed() {
+        isStreaming = false
+        cleanupRecording()
+        scheduleReconnect()
+    }
+
+    private val reconnectHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var reconnectRunnable: Runnable? = null
+
+    private fun scheduleReconnect() {
+        reconnectRunnable?.let { reconnectHandler.removeCallbacks(it) }
+        reconnectRunnable = Runnable {
+            android.util.Log.d("AudioStreamer", "Attempting reconnect after stream error...")
+            startStreaming()
+        }
+        // Collapse rapid failures into one reconnect attempt shortly after the last.
+        reconnectHandler.postDelayed(reconnectRunnable!!, 1000)
     }
 
     /**
@@ -475,12 +583,18 @@ class AudioStreamerService : Service() {
             var sample = (high shl 8) or low
             if (sample >= 32768) sample -= 65536
 
-            var amplifiedSample = (sample * factor).roundToInt()
-            amplifiedSample = max(-32768, min(32767, amplifiedSample))
-            if (amplifiedSample < 0) amplifiedSample += 65536
+            val amplified = (sample * factor).toDouble()
+            // Soft clip with tanh to avoid harsh digital clipping.
+            val clipped = if (kotlin.math.abs(amplified) > 32767.0) {
+                (kotlin.math.tanh(amplified / 32767.0) * 32767.0).roundToInt()
+            } else {
+                amplified.roundToInt()
+            }
+            var clamped = max(-32768, min(32767, clipped))
+            if (clamped < 0) clamped += 65536
 
-            out[i] = (amplifiedSample and 0xFF).toByte()
-            out[i + 1] = ((amplifiedSample shr 8) and 0xFF).toByte()
+            out[i] = (clamped and 0xFF).toByte()
+            out[i + 1] = ((clamped shr 8) and 0xFF).toByte()
             i += 2
         }
         if (length % 2 != 0) {
@@ -582,8 +696,15 @@ class AudioStreamerService : Service() {
                 fSample = filter.process(fSample)
             }
             fSample *= amplification
-            var clamped = fSample.roundToInt()
-            clamped = max(-32768, min(32767, clamped))
+            // Soft clip: tanh-based limiting to [-32767, 32767]. Hard clipping at
+            // integer limits causes harsh distortion; tanh gives a smooth
+            // saturation curve that stays within 16-bit range without crunch.
+            val clipped = if (kotlin.math.abs(fSample) > 32767.0) {
+                (kotlin.math.tanh(fSample / 32767.0) * 32767.0).roundToInt()
+            } else {
+                fSample.roundToInt()
+            }
+            var clamped = max(-32768, min(32767, clipped))
             if (clamped < 0) clamped += 65536
             out[outIdx] = (clamped and 0xFF).toByte()
             out[outIdx + 1] = ((clamped shr 8) and 0xFF).toByte()

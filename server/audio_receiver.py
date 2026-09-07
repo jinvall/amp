@@ -17,6 +17,8 @@ import struct
 import wave
 import json
 import hashlib
+import shutil
+import subprocess
 import queue as queue_module
 from datetime import datetime
 from collections import deque
@@ -180,9 +182,47 @@ class StorageManager:
         self.output_dir = output_dir
         self.max_seconds = max_seconds
         self.segments = []  # list of (filepath, duration_sec)
+        # Index files that already exist on disk so a restart does not "forget"
+        # them and let storage grow unbounded. Without this, pruning only ever
+        # saw segments saved in the current process and the backlog never shrank.
+        self._scan()
+        self._prune()
 
-    def add_segment(self, filepath, duration_sec):
-        self.segments.append((filepath, duration_sec))
+    @staticmethod
+    def _probe_duration(path):
+        """Real WAV duration (seconds). Returns 0 on any failure (0 is treated
+        as 'drop first' so a corrupt file can't inflate the cap)."""
+        try:
+            import wave
+            with wave.open(path, "rb") as w:
+                return w.getnframes() / float(w.getframerate())
+        except Exception as e:
+            print(f"[{datetime.now().isoformat()}] StorageManager._probe_duration failed for {path}: {e}")
+            return 0
+
+    def _scan(self):
+        """Rebuild the segment index from existing files on disk (oldest first)."""
+        if not os.path.isdir(self.output_dir):
+            return
+        files = []
+        for name in os.listdir(self.output_dir):
+            if not name.lower().endswith(".wav"):
+                continue
+            p = os.path.join(self.output_dir, name)
+            if not os.path.isfile(p):
+                continue
+            files.append(p)
+        # Oldest first so FIFO eviction order is correct after a restart.
+        files.sort(key=lambda p: os.path.getmtime(p))
+        for p in files:
+            self.segments.append((p, self._probe_duration(p)))
+
+    def add_segment(self, filepath, duration_sec=None):
+        # Prefer the real on-disk duration; fall back to the caller's estimate.
+        dur = self._probe_duration(filepath) if os.path.exists(filepath) else (duration_sec or 0)
+        if dur <= 0 and duration_sec:
+            dur = duration_sec
+        self.segments.append((filepath, dur))
         self._prune()
 
     def _prune(self):
@@ -191,7 +231,7 @@ class StorageManager:
             old_path, old_dur = self.segments.pop(0)
             try:
                 os.remove(old_path)
-                print(f"Pruned: {old_path} ({old_dur}s)")
+                print(f"Pruned: {old_path} ({old_dur:.1f}s)")
             except OSError as e:
                 print(f"Prune failed: {e}")
             total -= old_dur
@@ -264,6 +304,12 @@ class VisualizerAnalyzer:
         self.frame_samples = int(VIZ_FRAME_SEC * sample_rate)
         self.fft_size = VIZ_FFT_SIZE
         self.preset = preset if preset in self.PRESETS else self.DEFAULT_PRESET
+        # Per-graph enable flags (independent waveform / spectrogram toggles).
+        # When False, analyze() skips that graph entirely (saves CPU on the
+        # mini PC) and the frame carries null for the disabled graph so the
+        # browser stops drawing it.
+        self.wave_enabled = True
+        self.spec_enabled = True
         self._recompute_bins()
 
     def set_preset(self, preset):
@@ -345,41 +391,164 @@ class VisualizerAnalyzer:
         if audio.size == 0:
             return None
 
-        # ── Waveform: downsample to VIZ_WAVEFORM_POINTS via min/max envelope ──
-        n = audio.size
-        step = max(1, n // VIZ_WAVEFORM_POINTS)
-        wave = np.zeros(VIZ_WAVEFORM_POINTS, dtype=np.float32)
-        for i in range(VIZ_WAVEFORM_POINTS):
-            s = i * step
-            e = min(s + step, n)
-            wave[i] = float(np.mean(audio[s:e])) / 32768.0
-
-        # ── RMS (normalized 0..1) ──
+        # ── RMS (normalized 0..1) — always computed (cheap, drives the meter) ──
         rms = float(np.sqrt(np.mean(audio ** 2))) / 32768.0
 
+        # ── Waveform: downsample to VIZ_WAVEFORM_POINTS via min/max envelope ──
+        # Using mean (DC offset) makes the waveform invisible for AC-coupled
+        # audio. Instead we compute peak amplitude per bin: the max absolute
+        # deviation from zero, which captures the signal envelope.
+        wave = None
+        if self.wave_enabled:
+            n = audio.size
+            step = max(1, n // VIZ_WAVEFORM_POINTS)
+            wave = np.zeros(VIZ_WAVEFORM_POINTS, dtype=np.float32)
+            for i in range(VIZ_WAVEFORM_POINTS):
+                s = i * step
+                e = min(s + step, n)
+                wave[i] = float(np.max(np.abs(audio[s:e]))) / 32768.0
+
         # ── Spectrogram: rfft -> magnitude -> aggregate to frequency bands ──
-        win = self._window(audio.size)
-        windowed = audio * win
-        if audio.size < self.fft_size:
-            pad = np.zeros(self.fft_size - audio.size, dtype=np.float64)
-            windowed = np.concatenate([windowed, pad])
-        spec_full = np.abs(np.fft.rfft(windowed, n=self.fft_size))
-        spec = np.zeros(VIZ_SPECTROGRAM_BINS, dtype=np.float32)
-        for b, (lo, hi) in enumerate(self._spec_bins):
-            spec[b] = float(np.mean(spec_full[lo:hi]))
-        # Normalize to dB and clamp to a fixed floor for stable coloring.
-        eps = 1e-6
-        spec_db = 20.0 * np.log10(spec / (spec.max() if spec.max() > 0 else 1.0) + eps)
-        spec_db = np.clip(spec_db, -80.0, 0.0)
-        spec = (spec_db + 80.0) / 80.0  # 0..1
+        spec = None
+        if self.spec_enabled:
+            win = self._window(audio.size)
+            windowed = audio * win
+            if audio.size < self.fft_size:
+                pad = np.zeros(self.fft_size - audio.size, dtype=np.float64)
+                windowed = np.concatenate([windowed, pad])
+            spec_full = np.abs(np.fft.rfft(windowed, n=self.fft_size))
+            spec = np.zeros(VIZ_SPECTROGRAM_BINS, dtype=np.float32)
+            for b, (lo, hi) in enumerate(self._spec_bins):
+                spec[b] = float(np.mean(spec_full[lo:hi]))
+            # Normalize to dB and clamp to a fixed floor for stable coloring.
+            eps = 1e-6
+            spec_db = 20.0 * np.log10(spec / (spec.max() if spec.max() > 0 else 1.0) + eps)
+            spec_db = np.clip(spec_db, -80.0, 0.0)
+            spec = (spec_db + 80.0) / 80.0  # 0..1
 
         return {
             "t": sender_ts,                 # analysis timestamp (epoch seconds, float)
             "rms": round(rms, 6),
-            "wave": [round(float(x), 5) for x in wave],
-            "spec": [round(float(x), 5) for x in spec],
+            "wave": [round(float(x), 5) for x in wave] if wave is not None else None,
+            "spec": [round(float(x), 5) for x in spec] if spec is not None else None,
+            # Explicit effective state so the browser can pause+dump a disabled
+            # graph's ring instead of letting it keep filling.
+            "wave_active": wave is not None,
+            "spec_active": spec is not None,
             "preset": self.preset,
         }
+
+
+class LiveAudioMonitor:
+    """Stream live PCM to the system speaker/headphone output when monitoring is enabled."""
+
+    def __init__(self, sample_rate=SAMPLE_RATE, channels=CHANNELS, sample_width=SAMPLE_WIDTH):
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.sample_width = sample_width
+        self.is_enabled = True
+        self._lock = threading.Lock()
+        self._proc = None
+        self._cmd = self._choose_command()
+        self.total_written = 0
+
+    def _audio_device_available(self):
+        """Enable the real monitor whenever the host has a usable audio tool available."""
+        if shutil.which('ffplay'):
+            return True
+        if shutil.which('aplay'):
+            return True
+        if shutil.which('paplay'):
+            return True
+        return False
+
+    def _choose_command(self):
+        if not self._audio_device_available():
+            return None
+
+        if shutil.which('aplay'):
+            try:
+                result = subprocess.run(['aplay', '-l'], capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    out = (result.stdout or '') + '\n' + (result.stderr or '')
+                    lowered = out.lower()
+                    if 'device 0:' in lowered and 'analog' in lowered:
+                        return ['aplay', '-D', 'hw:0,0', '-q', '-f', 'S16_LE', '-r', str(self.sample_rate), '-c', str(self.channels), '-']
+            except Exception:
+                pass
+            return ['aplay', '-q', '-f', 'S16_LE', '-r', str(self.sample_rate), '-c', str(self.channels), '-']
+
+        if shutil.which('ffplay'):
+            return ['ffplay', '-loglevel', 'quiet', '-nodisp', '-autoexit', '-f', 's16le', '-ar', str(self.sample_rate), '-ac', str(self.channels), '-i', 'pipe:0']
+        if shutil.which('paplay'):
+            return ['paplay', '--format=s16le', '--rate=' + str(self.sample_rate), '--channels=' + str(self.channels)]
+        return None
+
+    def _start_process(self):
+        if self._cmd is None:
+            return False
+        try:
+            self._proc = subprocess.Popen(
+                self._cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                bufsize=0,
+            )
+            return True
+        except Exception:
+            self._proc = None
+            return False
+
+    def set_enabled(self, enabled):
+        will_enable = bool(enabled)
+        with self._lock:
+            self.is_enabled = will_enable
+        if not will_enable:
+            self.stop()
+        elif self._proc is None and self._cmd is not None:
+            self._start_process()
+
+    def feed(self, pcm_bytes):
+        if not self.is_enabled or not pcm_bytes:
+            return
+        with self._lock:
+            if self._cmd is None:
+                return
+            if self._proc is None and not self._start_process():
+                return
+            try:
+                if self._proc is None or self._proc.stdin is None:
+                    return
+                written = self._proc.stdin.write(pcm_bytes)
+                self._proc.stdin.flush()
+                self.total_written += written
+            except Exception:
+                try:
+                    if self._proc is not None and self._proc.stdin is not None:
+                        self._proc.stdin.close()
+                except Exception:
+                    pass
+                self._proc = None
+
+    def stop(self):
+        with self._lock:
+            proc = self._proc
+            self._proc = None
+        if proc is not None:
+            try:
+                if proc.stdin is not None:
+                    proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                proc.terminate()
+                proc.wait(timeout=1)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
 
 
 class VisualizerFeed:
@@ -394,6 +563,7 @@ class VisualizerFeed:
         self.host = host
         self.port = port
         self.analyzer = analyzer or VisualizerAnalyzer(SAMPLE_RATE)
+        self.audio_monitor = LiveAudioMonitor()
         self._pcm_ring = bytearray()
         self._frame_samples = self.analyzer.frame_samples
         self._lock = threading.Lock()
@@ -405,10 +575,46 @@ class VisualizerFeed:
         self._clients_lock = None   # asyncio.Lock, created in _run_server (loop-scoped)
         self.running = False
         self._loop = None
+        # Global monitoring enable flag. When disabled, the feed stops analyzing
+        # and queueing frames entirely; the browser retains the last rendered data
+        # until monitoring is re-enabled.
+        self._monitoring_enabled = True
+        # Per-graph manual enable flags (independent waveform / spectrogram
+        # toggles driven from the web UI). Default both ON.
+        self._wave_enabled = True
+        self._spec_enabled = True
+        # When paused (e.g. during heavy stem extraction that pegs CPU/RAM),
+        # feed_pcm drops incoming PCM instead of analyzing/queuing frames, so
+        # the waveform + spectrogram graphs effectively stop and the freed
+        # CPU/RAM is available for extraction. Consumers keep their last frame.
+        self._paused = False
+        # Reference count so concurrent extractions keep graphs paused until the
+        # last one finishes (see pause()/resume()).
+        self._pause_count = 0
+        # Extraction batch gate: when > 0 BOTH graphs are forced off for the
+        # whole duration of a manual "Extract Now" run, regardless of the
+        # manual toggle state. Refcounted so overlapping batches behave.
+        self._extract_disable = 0
 
     # ── Called from the receiver's worker thread (real-time path) ──
     def feed_pcm(self, pcm_bytes):
+        if not self._monitoring_enabled:
+            with self._lock:
+                self._pcm_ring.clear()
+            return
+        if self._paused:
+            # Drop the audio; we intentionally stop feeding the two graphs so
+            # extraction has the machine to itself. Clear any buffered partial
+            # frame so we don't resume mid-window with stale data.
+            with self._lock:
+                self._pcm_ring.clear()
+            return
         with self._lock:
+            # Resolve effective per-graph state: a graph draws only if it is
+            # manually enabled AND not forced off by an active extraction batch.
+            extract_off = self._extract_disable > 0
+            self.analyzer.wave_enabled = self._wave_enabled and not extract_off
+            self.analyzer.spec_enabled = self._spec_enabled and not extract_off
             self._pcm_ring.extend(pcm_bytes)
             needed = self._frame_samples * 2
             while len(self._pcm_ring) >= needed:
@@ -418,6 +624,86 @@ class VisualizerFeed:
                 f = self.analyzer.analyze(frame_pcm, sender_ts)
                 if f is not None:
                     self._enqueue(f)
+
+    def set_monitoring_enabled(self, enabled):
+        """Globally enable or disable the live visual + audio monitor feed."""
+        with self._lock:
+            self._monitoring_enabled = bool(enabled)
+            if not self._monitoring_enabled:
+                self._pcm_ring.clear()
+            self.audio_monitor.set_enabled(self._monitoring_enabled)
+            print(f"[{datetime.now().isoformat()}] monitoring {'enabled' if self._monitoring_enabled else 'disabled'}")
+
+    def set_graph_enabled(self, graph, enabled):
+        """Manually enable/disable one graph ('wave' or 'spec') from the UI."""
+        with self._lock:
+            if graph == 'wave':
+                self._wave_enabled = bool(enabled)
+            elif graph == 'spec':
+                self._spec_enabled = bool(enabled)
+            else:
+                print(f"[{datetime.now().isoformat()}] set_graph_enabled: unknown graph '{graph}'")
+                return
+            state = 'enabled' if enabled else 'disabled'
+            print(f"[{datetime.now().isoformat()}] graph '{graph}' {state} (manual)")
+
+    def graph_states(self):
+        """Return the effective + manual graph states (for /health + UI)."""
+        with self._lock:
+            extract_off = self._extract_disable > 0
+            return {
+                "monitoring": self._monitoring_enabled,
+                "wave_manual": self._wave_enabled,
+                "spec_manual": self._spec_enabled,
+                "extract_disabled": extract_off,
+                "wave_active": self._monitoring_enabled and self._wave_enabled and not extract_off,
+                "spec_active": self._monitoring_enabled and self._spec_enabled and not extract_off,
+                "paused": self._paused,
+            }
+
+    def pause(self):
+        """Stop feeding the visualizer graphs (waveform + spectrogram).
+
+        Safe to call from any thread. Reference-counted so concurrent extractions
+        (or a manual "Extract Now" batch) keep the graphs paused until the LAST
+        caller resumes. Frees CPU/RAM during extraction; the browser keeps
+        displaying its last received frame until resume().
+        """
+        with self._lock:
+            self._pause_count += 1
+            if self._pause_count == 1 and self.running:
+                self._paused = True
+                print(f"[{datetime.now().isoformat()}] viz_feed paused (graphs stopped)")
+
+    def resume(self):
+        """Resume feeding the visualizer graphs after a pause()."""
+        with self._lock:
+            if self._pause_count > 0:
+                self._pause_count -= 1
+            if self._pause_count == 0:
+                self._pcm_ring.clear()
+                self._paused = False
+                print(f"[{datetime.now().isoformat()}] viz_feed resumed (graphs running)")
+
+    def disable_graphs_for_extraction(self):
+        """Force BOTH graphs off for the duration of an extraction batch.
+
+        Refcounted. Re-enable with enable_graphs_for_extraction(); graphs return
+        to their manual toggle state once the last batch finishes.
+        """
+        with self._lock:
+            self._extract_disable += 1
+            if self._extract_disable == 1:
+                print(f"[{datetime.now().isoformat()}] graphs disabled for extraction batch")
+
+    def enable_graphs_for_extraction(self):
+        """Release one extraction-batch disable. Restores manual toggle state."""
+        with self._lock:
+            if self._extract_disable > 0:
+                self._extract_disable -= 1
+            if self._extract_disable == 0:
+                self._pcm_ring.clear()
+                print(f"[{datetime.now().isoformat()}] graphs re-enabled after extraction batch")
 
     def _enqueue(self, frame):
         """Thread-safe push into the asyncio queue. Never blocks the audio path."""
@@ -467,6 +753,9 @@ class VisualizerFeed:
                     "budget_ms": VIZ_MAX_LATENCY_MS,
                     "presets": sorted(self.analyzer.PRESETS.keys()),
                     "preset": self.analyzer.preset,
+                    "monitoring": self._monitoring_enabled,
+                    # Initial graph toggle states so the UI matches the server.
+                    "graph_states": self.graph_states(),
                 }))
                 # Accept client messages (e.g. preset changes) while frames are pushed
                 # by the broadcast loop.
@@ -476,10 +765,22 @@ class VisualizerFeed:
                     except Exception as e:
                         print(f"[{datetime.now().isoformat()}] viz_handler: bad msg: {e}")
                         continue
-                    if isinstance(msg, dict) and msg.get('type') == 'preset':
-                        preset = str(msg.get('preset', '')).lower()
-                        if preset in self.analyzer.PRESETS:
-                            self.analyzer.set_preset(preset)
+                    if isinstance(msg, dict):
+                        if msg.get('type') == 'preset':
+                            preset = str(msg.get('preset', '')).lower()
+                            if preset in self.analyzer.PRESETS:
+                                self.analyzer.set_preset(preset)
+                        elif msg.get('type') == 'monitor':
+                            self.set_monitoring_enabled(bool(msg.get('enabled', True)))
+                        elif msg.get('type') == 'graph':
+                            # Manual per-graph enable/disable toggle from the UI.
+                            graph = str(msg.get('graph', ''))
+                            enabled = bool(msg.get('enabled', True))
+                            if graph in ('wave', 'spec'):
+                                self.set_graph_enabled(graph, enabled)
+                            else:
+                                print(f"[{datetime.now().isoformat()}] viz_handler: "
+                                      f"bad graph '{graph}'")
             except Exception as e:
                 print(f"[{datetime.now().isoformat()}] viz_handler: connection error: {e}")
             finally:
@@ -511,7 +812,19 @@ class VisualizerFeed:
         async def main_async():
             self._loop = asyncio.get_running_loop()
             self._out_queue = asyncio.Queue(maxsize=120)  # ~2.4 s of frames of headroom
-            async with websockets.serve(handler, self.host, self.port, max_size=2 ** 20):
+            # Disable server-initiated keepalive pings: this is a one-way frame
+            # push (server -> browser) and the browser does not ping back. With
+            # pings enabled, the connection task blocked on `async for raw in ws:`
+            # never services the pong, so the server killed every client with
+            # "1011 keepalive ping timeout; no close frame received" -> nothing
+            # ever got delivered. close_timeout=None lets in-flight frames drain.
+            async with websockets.serve(
+                handler, self.host, self.port,
+                max_size=2 ** 20,
+                ping_interval=None,
+                ping_timeout=None,
+                close_timeout=None,
+            ):
                 print(f"Visualizer WebSocket listening on {self.host}:{self.port} "
                       f"(budget={VIZ_MAX_LATENCY_MS:.0f}ms)")
                 await broadcast_loop()
@@ -558,6 +871,24 @@ class AudioReceiver:
         self._wav_output_dir = OUTPUT_DIR
         os.makedirs(self._wav_output_dir, exist_ok=True)
 
+        # Stem extraction manager (capped rotation, CPU-only by default)
+        stem_dir = os.path.join(os.path.dirname(self._wav_output_dir), "audio_stems")
+        self.stem_manager = None
+        self.stem_extraction_enabled = False
+        # Manual "Extract Now" batch gating: counts in-flight batch segments so
+        # the graphs stay OFF until the whole batch completes, then restores.
+        self._extract_batch_remaining = 0
+        self._extract_batch_lock = threading.Lock()
+        try:
+            from stem_manager import StemManager
+            self.stem_manager = StemManager(
+                stem_dir, max_seconds=1800, viz_feed=self.viz_feed
+            )
+            self.stem_extraction_enabled = True
+            print(f"[stem] StemManager initialized: dir={stem_dir}")
+        except Exception as e:
+            print(f"[stem] StemManager disabled: {e}")
+
         # Dynamic segment config
         self.segment_duration_sec = SEGMENT_DURATION_SEC
         self.overlap_duration_sec = OVERLAP_DURATION_SEC
@@ -570,14 +901,32 @@ class AudioReceiver:
             self._last_config_hash = _config_hash(startup_cfg)
             print(f"[{datetime.now().isoformat()}] Loaded config from {self.config_path}: {startup_cfg}")
 
+        # Apply stem backend config after startup config is loaded.
+        if self.stem_manager is not None and startup_cfg:
+            backend_cfg = startup_cfg.get('stem_backend')
+            preset_cfg = startup_cfg.get('stem_backend_preset')
+            if backend_cfg:
+                self.stem_manager.backend = backend_cfg
+                print(f"[stem] backend set to {backend_cfg} from config")
+            if preset_cfg:
+                self.stem_manager._backend_preset = preset_cfg
+                print(f"[stem] backend preset set to {preset_cfg} from config")
+
     def connection_state(self):
         pcm = len(getattr(self, 'clients', set()))
         ctrl = len(getattr(self, '_control_clients', set()))
         viz = len(getattr(self.viz_feed, '_clients', set())) if self.viz_feed is not None else 0
+        viz_paused = bool(getattr(self.viz_feed, '_paused', False)) if self.viz_feed is not None else False
+        viz_disabled = bool(getattr(self.viz_feed, '_extract_disable', 0) > 0) if self.viz_feed is not None else False
+        graph_states = self.viz_feed.graph_states() if self.viz_feed is not None else {}
         return {
             "pcm_clients": pcm,
             "control_clients": ctrl,
             "viz_clients": viz,
+            "monitoring_enabled": bool(getattr(self.viz_feed, '_monitoring_enabled', True)) if self.viz_feed is not None else True,
+            "viz_paused": viz_paused,
+            "viz_disabled": viz_disabled,
+            "graph_states": graph_states,
             "android_connected": pcm > 0,
         }
 
@@ -589,11 +938,15 @@ class AudioReceiver:
     def apply_config_dict(self, cfg, persist=False):
         """Apply a config dict live. Thread-safe. Optionally persist to config.json.
 
-        Never raises — callers always get a safe no-op on bad input.
+        Returns True if any setting actually changed, False otherwise. Never
+        raises — but unexpected failures are logged loudly (with traceback) so
+        a real bug is never silently swallowed as a "successful" no-op.
         """
         try:
             if not isinstance(cfg, dict):
-                return
+                print(f"[{datetime.now().isoformat()}] apply_config_dict: caller passed "
+                      f"non-dict ({type(cfg).__name__}); refusing to apply")
+                return False
             with self.config_lock:
                 changed = False
                 if 'segment_duration_min' in cfg:
@@ -637,8 +990,68 @@ class AudioReceiver:
                     if save_config(self.config_path, merged):
                         self._last_config_hash = _config_hash(merged)
                         print(f"[{datetime.now().isoformat()}] Persisted config to {self.config_path}")
+
+                # Stem manager config
+                if self.stem_manager is not None:
+                    if 'stem_max_storage_seconds' in cfg:
+                        try:
+                            val = int(cfg['stem_max_storage_seconds'])
+                            val = max(60, min(val, 86400))
+                            self.stem_manager.max_seconds = val
+                            changed = True
+                            print(f"[{datetime.now().isoformat()}] Updated stem max storage to {val}s")
+                        except Exception as e:
+                            print(f"[{datetime.now().isoformat()}] Bad stem_max_storage_seconds: {e}")
+                    if 'stem_backend' in cfg:
+                        try:
+                            self.stem_manager.backend = cfg['stem_backend']
+                            changed = True
+                            print(f"[{datetime.now().isoformat()}] Updated stem backend to "
+                                  f"{self.stem_manager.backend}")
+                        except Exception as e:
+                            print(f"[{datetime.now().isoformat()}] Bad stem_backend: {e}")
+                    if 'stem_backend_preset' in cfg:
+                        try:
+                            self.stem_manager._backend_preset = cfg['stem_backend_preset']
+                            changed = True
+                            print(f"[{datetime.now().isoformat()}] Updated stem backend preset to "
+                                  f"{self.stem_manager._backend_preset}")
+                        except Exception as e:
+                            print(f"[{datetime.now().isoformat()}] Bad stem_backend_preset: {e}")
+
+                # Visualizer graph toggles (independent wave / spec enable).
+                if self.viz_feed is not None:
+                    if 'monitoring_enabled' in cfg:
+                        try:
+                            self.viz_feed.set_monitoring_enabled(bool(cfg['monitoring_enabled']))
+                            changed = True
+                            print(f"[{datetime.now().isoformat()}] monitoring set to {bool(cfg['monitoring_enabled'])}")
+                        except Exception as e:
+                            print(f"[{datetime.now().isoformat()}] Bad monitoring_enabled: {e}")
+                    if 'viz_wave_enabled' in cfg:
+                        try:
+                            self.viz_feed.set_graph_enabled('wave', bool(cfg['viz_wave_enabled']))
+                            changed = True
+                            print(f"[{datetime.now().isoformat()}] graph 'wave' "
+                                  f"set to {bool(cfg['viz_wave_enabled'])}")
+                        except Exception as e:
+                            print(f"[{datetime.now().isoformat()}] Bad viz_wave_enabled: {e}")
+                    if 'viz_spec_enabled' in cfg:
+                        try:
+                            self.viz_feed.set_graph_enabled('spec', bool(cfg['viz_spec_enabled']))
+                            changed = True
+                            print(f"[{datetime.now().isoformat()}] graph 'spec' "
+                                  f"set to {bool(cfg['viz_spec_enabled'])}")
+                        except Exception as e:
+                            print(f"[{datetime.now().isoformat()}] Bad viz_spec_enabled: {e}")
+            return changed
         except Exception as e:
-            print(f"[{datetime.now().isoformat()}] apply_config_dict error (ignored): {e}")
+            # Safety net only. A hit here means an unexpected bug, NOT a benign
+            # no-op — log with traceback so it can't masquerade as success.
+            import traceback
+            print(f"[{datetime.now().isoformat()}] apply_config_dict UNEXPECTED ERROR: {e}")
+            traceback.print_exc()
+            return False
 
     def _save_segment(self, pcm_data):
         """Save segment as WAV."""
@@ -655,9 +1068,108 @@ class AudioReceiver:
             self.storage.add_segment(filepath, self.segment_duration_sec)
             print(f"[{datetime.now().isoformat()}] Saved: {filename} "
                   f"({len(pcm_data)} bytes, {self.segment_duration_sec}s)")
+
+            # Async stem extraction — never block the audio path.
+            if self.stem_manager is not None and self.stem_extraction_enabled:
+                segment_id = os.path.splitext(filename)[0]
+                threading.Thread(
+                    target=self._extract_stems_async,
+                    args=(segment_id, filepath),
+                    daemon=True,
+                ).start()
+
             self.segment_index += 1
         except Exception as e:
             print(f"Failed to save segment: {e}")
+
+    def _extract_stems_async(self, segment_id, segment_path, batch=False):
+        try:
+            stems = self.stem_manager.extract(segment_id, segment_path)
+            if stems:
+                print(f"[stem] extracted {len(stems)} stems for {segment_id}: "
+                      f"{', '.join(stems.keys())}")
+            else:
+                print(f"[stem] no stems extracted for {segment_id}")
+        except Exception as e:
+            print(f"[stem] async extraction failed for {segment_id}: {e}")
+        finally:
+            # If this was part of a manual "Extract Now" batch, release one slot
+            # and re-enable the graphs once the batch is fully drained.
+            if batch:
+                with self._extract_batch_lock:
+                    self._extract_batch_remaining -= 1
+                    if self._extract_batch_remaining <= 0:
+                        self._extract_batch_remaining = 0
+                        if self.viz_feed is not None:
+                            self.viz_feed.enable_graphs_for_extraction()
+
+    # ── Stem service controls ───────────────────────────────────────────
+    def toggle_stem_extraction(self, enabled=None):
+        """Enable or disable automatic stem extraction.
+
+        Returns the new state (bool).
+        """
+        if self.stem_manager is None:
+            return self.stem_extraction_enabled
+        if enabled is not None:
+            self.stem_extraction_enabled = bool(enabled)
+        else:
+            self.stem_extraction_enabled = not self.stem_extraction_enabled
+        state = 'enabled' if self.stem_extraction_enabled else 'disabled'
+        print(f"[stem] automatic extraction {state}")
+        return self.stem_extraction_enabled
+
+    def extract_all_stems(self):
+        """Manually trigger stem extraction for every segment on disk.
+
+        While the batch runs, BOTH visualizer graphs are forced off (per
+        KODE.md) so the CPU/RAM is fully available to the models; they are
+        re-enabled automatically when the last segment finishes. Returns the
+        number of segments queued.
+        """
+        if self.stem_manager is None:
+            return 0
+        count = 0
+        for filename in sorted(os.listdir(self._wav_output_dir)):
+            if not filename.endswith('.wav'):
+                continue
+            segment_id = os.path.splitext(filename)[0]
+            segment_path = os.path.join(self._wav_output_dir, filename)
+            if not os.path.exists(segment_path):
+                continue
+            # Skip if we already have stems for this segment.
+            existing = self.stem_manager.list_stems(segment_id)
+            if existing:
+                continue
+            threading.Thread(
+                target=self._extract_stems_async,
+                args=(segment_id, segment_path, True),
+                daemon=True,
+            ).start()
+            count += 1
+        if count > 0:
+            with self._extract_batch_lock:
+                self._extract_batch_remaining += count
+            if self.viz_feed is not None:
+                self.viz_feed.disable_graphs_for_extraction()
+            print(f"[stem] manual extraction queued for {count} segments")
+        return count
+
+    def clear_all_stems(self):
+        """Remove all stored stems and reset the stem manager index.
+
+        Returns the number of segments cleared.
+        """
+        if self.stem_manager is None:
+            return 0
+        count = len(self.stem_manager._entries)
+        self.stem_manager._entries.clear()
+        stem_dir = self.stem_manager.output_dir
+        if os.path.isdir(stem_dir):
+            for segment_id in os.listdir(stem_dir):
+                self.stem_manager.remove(segment_id)
+        print(f"[stem] cleared {count} segments")
+        return count
 
     def _compute_rms(self, data):
         if not HAS_NUMPY or len(data) < 2:
@@ -670,6 +1182,16 @@ class AudioReceiver:
     def _process_audio(self, data):
         """Feed PCM data into ring buffer and trigger segment saves."""
         with self.lock:
+            # The live monitor MUST be the first consumer of the raw PCM so it
+            # hears the original stream before buffering, re-framing, or slicing.
+            if self.viz_feed is not None:
+                try:
+                    monitor = getattr(self.viz_feed, 'audio_monitor', None)
+                    if monitor is not None and getattr(self.viz_feed, '_monitoring_enabled', True):
+                        monitor.feed(data)
+                except Exception as e:
+                    print(f"[{datetime.now().isoformat()}] monitor feed error (ignored): {e}")
+
             self.ring_buffer.extend(data)
             self.bytes_since_last_segment += len(data)
 
@@ -713,10 +1235,17 @@ class AudioReceiver:
             # coalesced after the config newline so we never drop leading PCM).
             config, leftover = self._read_config(conn)
             if config is not None:
-                self._apply_client_config(config, persist=True)
-                print(f"[{datetime.now().isoformat()}] Applied config from {addr}: {config}")
+                # _read_config already returns a parsed dict; apply it directly
+                # instead of re-parsing (which would raise TypeError). Report the
+                # REAL outcome — never claim success when nothing changed/failed.
+                changed = self.apply_config_dict(config, persist=True)
+                if changed:
+                    print(f"[{datetime.now().isoformat()}] Applied config from {addr}: {config}")
+                else:
+                    print(f"[{datetime.now().isoformat()}] Config from {addr} had no effect "
+                          f"(unknown/empty keys or apply failed): {config}")
 
-            queue = queue_module.Queue(maxsize=50)
+            queue = queue_module.Queue(maxsize=4)
             worker = threading.Thread(target=self._process_queue, args=(queue,), daemon=True)
             worker.start()
 
@@ -805,14 +1334,20 @@ class AudioReceiver:
                 return (None, bytes(buffer))
 
     def _apply_client_config(self, raw_json, persist=False):
-        """Parse a JSON config line from a client and apply it live."""
+        """Parse a JSON config line from a client and apply it live.
+
+        Returns True if a setting changed. Empty input and parse errors are
+        reported (not swallowed) so the control channel can't silently drop a
+        config push.
+        """
         if not raw_json or not str(raw_json).strip():
-            return
+            return False
         try:
             config = json.loads(raw_json)
-            self.apply_config_dict(config, persist=persist)
+            return self.apply_config_dict(config, persist=persist)
         except Exception as e:
             print(f"[{datetime.now().isoformat()}] Failed to apply client config: {e}")
+            return False
 
     def _process_queue(self, q):
         """Worker thread: drain audio queue and process chunks."""
@@ -864,9 +1399,15 @@ class AudioReceiver:
                         continue
                     if not line.strip():
                         continue
-                    # Log the actual bytes so we can debug bad clients (Android, etc.)
-                    print(f"[{datetime.now().isoformat()}] Control rx from {addr}: {line[:200]}")
-                    self._apply_client_config(line, persist=True)
+                    # Log the received config line (sanitized to ASCII so the
+                    # unified log never becomes binary/un-grep-able if a client
+                    # sends non-text bytes). Keep enough to debug bad clients.
+                    safe = ''.join(ch if 32 <= ord(ch) < 127 else '?' for ch in line[:200])
+                    print(f"[{datetime.now().isoformat()}] Control rx from {addr}: {safe}")
+                    changed = self._apply_client_config(line, persist=True)
+                    if not changed:
+                        print(f"[{datetime.now().isoformat()}] Control config from {addr} had no "
+                              f"effect (unknown/empty keys or parse/apply failed): {safe}")
         except Exception as e:
             print(f"[{datetime.now().isoformat()}] Control client {addr} error: {e}")
         finally:

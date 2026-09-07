@@ -50,8 +50,14 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Restore persisted slider positions (defaults if none saved).
+        // Restore persisted connection (IP + port) so the user does not have to
+        // re-enter them every launch. Port defaults to the server's fixed PCM port
+        // (8090); IP has no sane default, so first launch still requires entry.
         val prefs = getPreferences(Context.MODE_PRIVATE)
+        binding.etServerIp.setText(prefs.getString(KEY_SERVER_IP, "") ?: "")
+        binding.etServerPort.setText(prefs.getInt(KEY_SERVER_PORT, DEFAULT_SERVER_PORT).toString())
+
+        // Restore persisted slider positions (defaults if none saved).
         binding.sbAmplification.progress = prefs.getInt(KEY_AMP, 100)
         binding.sbGainCeiling.progress = prefs.getInt(KEY_CEILING, 50)
         binding.sbPreGain.progress = prefs.getInt(KEY_PREGain, 0)
@@ -64,6 +70,9 @@ class MainActivity : AppCompatActivity() {
         binding.sbCooldown.progress = prefs.getInt(KEY_COOLDOWN, 20)
         binding.sbNoiseGate.progress = prefs.getInt(KEY_NOISEGATE, 10)
         binding.sbSegmentDuration.progress = prefs.getInt(KEY_SEGMENT, 50)
+
+        // Audio source spinner: populate from service's source map, restore selection.
+        setupAudioSourceSpinner(prefs.getInt(KEY_AUDIO_SOURCE, -1))
 
         refreshAllLabels()
         wireSeekBar(binding.sbAmplification) { amplificationFromProgress(it) }
@@ -101,6 +110,28 @@ class MainActivity : AppCompatActivity() {
         binding.tvCooldownValue.text = cooldownFromProgress(binding.sbCooldown.progress).toString()
         binding.tvNoiseGateValue.text = noiseGateFromProgress(binding.sbNoiseGate.progress).toString()
         binding.tvSegmentDurationValue.text = segmentDurationFromProgress(binding.sbSegmentDuration.progress).toString()
+    }
+
+    private fun setupAudioSourceSpinner(savedSource: Int) {
+        val entries = AudioStreamerService.AUDIO_SOURCES.entries
+            .sortedBy { it.key }
+            .map { it.value }
+            .toTypedArray()
+        val adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, entries)
+        binding.spAudioSource.adapter = adapter
+        // Set the selected position by matching the saved source id to its sorted index.
+        val sortedIds = AudioStreamerService.AUDIO_SOURCES.keys.sorted()
+        val selectedIndex = sortedIds.indexOf(savedSource).let { if (it >= 0) it else 0 }
+        binding.spAudioSource.setSelection(selectedIndex)
+        binding.spAudioSource.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                val sourceId = sortedIds[position]
+                getPreferences(Context.MODE_PRIVATE).edit()
+                    .putInt(KEY_AUDIO_SOURCE, sourceId)
+                    .apply()
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
     }
 
     private fun wireSeekBar(seekBar: android.widget.SeekBar, label: (Int) -> Any) {
@@ -241,6 +272,14 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // Persist the working connection so it survives restarts (no re-entry).
+        val prefs = getPreferences(Context.MODE_PRIVATE)
+        prefs.edit().apply {
+            putString(KEY_SERVER_IP, ip)
+            putInt(KEY_SERVER_PORT, port)
+            apply()
+        }
+
         val amplification = amplificationFromProgress(binding.sbAmplification.progress)
         val gainCeiling = gainCeilingFromProgress(binding.sbGainCeiling.progress)
         val preGain = preGainFromProgress(binding.sbPreGain.progress)
@@ -255,6 +294,7 @@ class MainActivity : AppCompatActivity() {
         val cooldown = cooldownFromProgress(binding.sbCooldown.progress)
         val segmentDuration = segmentDurationFromProgress(binding.sbSegmentDuration.progress)
         val noiseGate = noiseGateFromProgress(binding.sbNoiseGate.progress)
+        val audioSource = AudioStreamerService.AUDIO_SOURCES.keys.sorted()[binding.spAudioSource.selectedItemPosition]
 
         val intent = Intent(this, AudioStreamerService::class.java).apply {
             putExtra(AudioStreamerService.EXTRA_SERVER_IP, ip)
@@ -267,6 +307,7 @@ class MainActivity : AppCompatActivity() {
             putExtra(AudioStreamerService.EXTRA_BREATHING_COOLDOWN, cooldown)
             putExtra(AudioStreamerService.EXTRA_SEGMENT_DURATION, segmentDuration)
             putExtra(AudioStreamerService.EXTRA_NOISE_GATE, noiseGate)
+            putExtra(AudioStreamerService.EXTRA_AUDIO_SOURCE, audioSource)
         }
         startForegroundService(intent)
         bindService(intent, connection, Context.BIND_AUTO_CREATE)
@@ -346,6 +387,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        // Connection persistence: IP + PCM port. Port defaults to the server's
+        // fixed PCM port (8090), consistent with server/audio_receiver.py.
+        private const val KEY_SERVER_IP = "server_ip"
+        private const val KEY_SERVER_PORT = "server_port"
+        private const val DEFAULT_SERVER_PORT = 8090
+
         // SharedPreferences keys (store raw 0-100 progress so converters stay source of truth)
         private const val KEY_AMP = "amp"
         private const val KEY_CEILING = "ceiling"
@@ -359,6 +406,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_COOLDOWN = "cooldown"
         private const val KEY_NOISEGATE = "noisegate"
         private const val KEY_SEGMENT = "segment"
+        private const val KEY_AUDIO_SOURCE = "audio_source"
 
         private const val MAX_SENSITIVITY = 100.0
         private const val MAX_COOLDOWN = 10.0

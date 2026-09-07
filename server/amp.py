@@ -15,12 +15,15 @@ For an always-on service use the systemd unit (server/amp-receiver.service), whi
 invokes this same entry point.
 """
 import argparse
+import io
 import json
 import os
 import signal
 import sys
 import threading
 import time
+import cgi
+from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -34,17 +37,213 @@ import socketserver                               # noqa: E402
 
 
 class HealthHandler(_WebHandler):
-    """Static file server + a /health JSON endpoint for probes."""
+    """Static file server + /health and /stems JSON endpoints."""
     _state = {}  # populated by main(): {pcm, control, viz, web, ready, viz_enabled}
 
     def do_GET(self):
-        if self.path.split('?')[0] in ('/health', '/health/'):
+        path = self.path.split('?')[0]
+        if path in ('/health', '/health/'):
+            # Build a strictly-serializable payload. _state contains a live
+            # AudioReceiver instance ("receiver") which json.dumps cannot
+            # serialize; expose only ports/status plus a live connection
+            # snapshot via connection_state().
+            state = dict(HealthHandler._state)
+            receiver = state.pop('receiver', None)
+            try:
+                state['connections'] = receiver.connection_state() if receiver is not None else {}
+            except Exception as e:
+                # Do NOT silently swallow — surface it so a broken receiver
+                # state is visible instead of masquerading as "healthy".
+                print(f"[{_ts()}] /health: connection_state() failed: {e}")
+                state['connections'] = {}
+                state['connection_state_error'] = str(e)
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps(HealthHandler._state).encode('utf-8'))
+            self.wfile.write(json.dumps(state).encode('utf-8'))
+            return
+        if path == '/stems':
+            self._serve_stems()
             return
         super().do_GET()
+
+    def do_POST(self):
+        path = self.path.split('?')[0]
+        if path == '/stems/toggle':
+            self._handle_stem_toggle()
+            return
+        if path == '/stems/extract':
+            self._handle_stem_extract()
+            return
+        if path == '/stems/clear':
+            self._handle_stem_clear()
+            return
+        if path == '/upload':
+            self._handle_upload()
+            return
+        self.send_response(404)
+        self.end_headers()
+        self.wfile.write(b'{"error":"not found"}')
+
+    def _handle_stem_toggle(self):
+        try:
+            receiver = HealthHandler._state.get('receiver')
+            if receiver is None or receiver.stem_manager is None:
+                self.send_response(503)
+                self.end_headers()
+                self.wfile.write(b'{"error":"stem manager unavailable"}')
+                return
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            enabled = body.get('enabled')
+            new_state = receiver.toggle_stem_extraction(enabled)
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"enabled": new_state}).encode('utf-8'))
+        except Exception as e:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+
+    def _handle_stem_extract(self):
+        try:
+            receiver = HealthHandler._state.get('receiver')
+            if receiver is None or receiver.stem_manager is None:
+                self.send_response(503)
+                self.end_headers()
+                self.wfile.write(b'{"error":"stem manager unavailable"}')
+                return
+            count = receiver.extract_all_stems()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"queued": count}).encode('utf-8'))
+        except Exception as e:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+
+    def _handle_stem_clear(self):
+        try:
+            receiver = HealthHandler._state.get('receiver')
+            if receiver is None or receiver.stem_manager is None:
+                self.send_response(503)
+                self.end_headers()
+                self.wfile.write(b'{"error":"stem manager unavailable"}')
+                return
+            count = receiver.clear_all_stems()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"cleared": count}).encode('utf-8'))
+        except Exception as e:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+
+    def _serve_stems(self):
+        try:
+            receiver = HealthHandler._state.get('receiver')
+            if receiver is None or receiver.stem_manager is None:
+                self.send_response(503)
+                self.end_headers()
+                self.wfile.write(b'{"error":"stem manager unavailable"}')
+                return
+            data = {
+                "stats": receiver.stem_manager.stats(),
+                "segments": {},
+                "service_enabled": receiver.stem_extraction_enabled,
+                "exceptions": receiver.stem_manager.recent_exceptions(),
+            }
+            for sid, stems in receiver.stem_manager.list_stems().items():
+                data["segments"][sid] = {
+                    "stems": stems,
+                    "segment_path": os.path.join(
+                        receiver._wav_output_dir, sid + ".wav"
+                    ),
+                }
+            body = json.dumps(data).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as e:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+
+    def _handle_upload(self):
+        try:
+            receiver = HealthHandler._state.get('receiver')
+            if receiver is None:
+                self.send_response(503)
+                self.end_headers()
+                self.wfile.write(b'{"error":"receiver unavailable"}')
+                return
+            content_type = self.headers.get('Content-Type', '')
+            if 'multipart/form-data' not in content_type:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b'{"error":"expected multipart/form-data"}')
+                return
+            form = cgi.FieldStorage(
+                fp=self.rfile,
+                headers=self.headers,
+                environ={'REQUEST_METHOD': 'POST',
+                         'CONTENT_TYPE': content_type},
+            )
+            uploaded = form['file'] if 'file' in form else None
+            if uploaded is None or not uploaded.filename:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b'{"error":"missing file field"}')
+                return
+            filename = uploaded.filename
+            if not filename.lower().endswith('.wav'):
+                self.send_response(415)
+                self.end_headers()
+                self.wfile.write(b'{"error":"only .wav files are supported"}')
+                return
+            data = uploaded.file.read()
+            if not data:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b'{"error":"empty file"}')
+                return
+            out_dir = receiver._wav_output_dir
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.splitext(filename)[0]
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            out_name = f"upload_{ts}_{base}.wav"
+            out_path = os.path.join(out_dir, out_name)
+            with open(out_path, 'wb') as f:
+                f.write(data)
+            segment_id = os.path.splitext(out_name)[0]
+            queued = False
+            if receiver.stem_manager is not None and receiver.stem_extraction_enabled:
+                threading.Thread(
+                    target=receiver._extract_stems_async,
+                    args=(segment_id, out_path),
+                    daemon=True,
+                ).start()
+                queued = True
+            body = json.dumps({
+                "saved": out_name,
+                "segment_id": segment_id,
+                "size": len(data),
+                "stem_extraction_queued": queued,
+            }).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as e:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
     def log_message(self, *args):
         pass
@@ -89,6 +288,7 @@ def main():
     HealthHandler._state = {
         "pcm": pcm_port, "control": control_port, "viz": viz_port,
         "web": args.web_port, "ready": False, "viz_enabled": not args.no_viz,
+        "receiver": receiver,
     }
 
     # Start web UI in a daemon thread (single process; no orphan risk).

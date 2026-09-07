@@ -41,10 +41,26 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:inputType="number"
-                android:text="8080"
+                android:text="8090"
                 android:textColor="@color/srp_text"
                 android:backgroundTint="@color/srp_surface" />
         </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Microphone Source"
+            android:layout_marginTop="12dp"
+            android:textSize="14sp"
+            android:textColor="@color/srp_text" />
+
+        <Spinner
+            android:id="@+id/spAudioSource"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:minHeight="48dp"
+            android:backgroundTint="@color/srp_accent" />
 
         <TextView
             android:layout_width="match_parent"

@@ -31,6 +31,17 @@
     background: var(--color-surface);
   }
   header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .5px; }
+  .brand {
+    display: inline-flex; align-items: center; gap: 8px;
+    text-decoration: none; color: var(--color-text);
+    padding-right: 14px; margin-right: 2px;
+    border-right: 1px solid var(--color-border);
+  }
+  .brand-logo { width: 26px; height: 26px; display: block; }
+  .brand-name {
+    font-size: 12px; font-weight: 700; letter-spacing: 1.2px;
+    text-transform: uppercase; color: var(--color-accent, var(--color-text));
+  }
   .status-dot {
     width: 10px; height: 10px; border-radius: 50%;
     background: var(--color-text-muted);
@@ -69,7 +80,7 @@
   .meter-strip.right { right: 0; }
   canvas { display: block; width: 100%; }
   #waveform { height: 220px; padding-right: 52px; }
-  #spectrogram { height: 320px; padding-left: 52px; }
+  #spectrogram { height: 320px; padding-right: 52px; }
   .hint { font-size: 11px; color: var(--color-text-muted); }
   .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .buffer-control { display: inline-flex; align-items: center; gap: 6px; }
@@ -81,6 +92,7 @@
     padding: 5px 10px; font-size: 12px; cursor: pointer;
   }
   button:hover { border-color: var(--color-accent); }
+  button.off { opacity: 0.5; border-color: var(--color-text-muted); }
   input[type=text] {
     background: var(--color-bg); color: var(--color-text);
     border: 1px solid var(--color-border); border-radius: 6px;
@@ -91,10 +103,16 @@
 <body>
 <header>
   <span id="statusDot" class="status-dot"></span>
+  <a class="brand" href="https://sluttyrabbit.productions" title="Slutty Rabbit Productions" target="_blank" rel="noopener">
+    <img class="brand-logo" src="assets/logo-primary.svg" alt="SRP" />
+    <span class="brand-name">Slutty Rabbit Productions</span>
+  </a>
   <h1>AMP · Live Audio Visualizer</h1>
   <div class="toolbar">
     <input id="wsUrl" type="text" value="" placeholder="ws://host:8092" />
     <button id="connectBtn">Connect</button>
+    <button id="toggleWaveBtn" title="Toggle waveform graph">Wave: On</button>
+    <button id="toggleSpecBtn" title="Toggle spectrogram graph">Spec: On</button>
   </div>
   <div class="spacer"></div>
   <div class="meter">
@@ -149,7 +167,28 @@
       </span>
     </div>
     <canvas id="spectrogram"></canvas>
-    <canvas id="freqMeter" class="meter-strip left"></canvas>
+    <canvas id="freqMeter" class="meter-strip right"></canvas>
+  </div>
+  <div class="panel" id="stemsPanel">
+    <div class="label">
+      <span>Stems</span>
+      <span class="hint" id="stemServiceStatus">offline extraction · service stopped</span>
+      <span class="toolbar">
+        <button id="toggleStemServiceBtn">Start Service</button>
+        <button id="extractNowBtn">Extract Now</button>
+        <button id="clearStemsBtn">Clear All</button>
+        <button id="refreshStemsBtn">Refresh</button>
+      </span>
+    </div>
+    <div id="dropZone" style="padding:10px 12px; border:2px dashed #3d2d61; border-radius:8px; text-align:center; cursor:pointer;">
+      <span class="hint">Drop a .wav file here or click to load</span>
+      <input id="fileInput" type="file" accept=".wav,audio/wav" style="display:none;" />
+    </div>
+    <div style="padding:0 12px 10px 12px;">
+      <span class="hint" id="stemStats"></span>
+      <div id="stemExceptions" style="margin-top:6px; display:flex; flex-direction:column; gap:4px;"></div>
+      <div id="stemList" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
+    </div>
   </div>
 </main>
 
@@ -181,6 +220,8 @@
   const connectBtn = document.getElementById('connectBtn');
   const wsUrlInput = document.getElementById('wsUrl');
   const colormapSel = document.getElementById('colormap');
+  const toggleWaveBtn = document.getElementById('toggleWaveBtn');
+  const toggleSpecBtn = document.getElementById('toggleSpecBtn');
 
   budgetVal.textContent = 'budget ' + cfg.budgetMs.toFixed(0) + 'ms';
 
@@ -213,6 +254,10 @@
   let specRb = createRingBuffer(SPEC_HISTORY_DEFAULT);
   let latestRms = 0;
   let frozen = false;
+  // Effective per-graph active state mirrored from the server. Used to pause +
+  // dump a graph's ring when it is disabled so the buffer stops filling (and old
+  // frames don't replay when it is re-enabled).
+  const graphActive = { wave: true, spec: true };
 
   waveCanvas.addEventListener('click', () => { frozen = !frozen; });
 
@@ -353,14 +398,37 @@
       if (msg.type === 'config') {
         Object.assign(cfg, msg);
         budgetVal.textContent = 'budget ' + cfg.budgetMs.toFixed(0) + 'ms';
+        // Sync the per-graph toggle buttons with the server's state.
+        if (msg.graph_states) {
+          setGraphToggle('wave', msg.graph_states.wave_active !== false && msg.graph_states.wave_manual !== false);
+          setGraphToggle('spec', msg.graph_states.spec_active !== false && msg.graph_states.spec_manual !== false);
+        }
         return;
       }
       // analysis frame
-      const wave = new Float32Array(msg.wave);
-      const spec = new Float32Array(msg.spec);
+      // Server sends wave/spec === null (and *_active:false) when a graph is
+      // disabled. We PAUSE that graph's ring (don't push) and DUMP it on the
+      // transition to disabled so it stops filling and old frames don't replay
+      // when re-enabled. RMS/latency still update from the frame.
+      const waveActive = msg.wave_active !== false;
+      const specActive = msg.spec_active !== false;
+
+      // Dump a graph's ring the moment it goes inactive (one-time clear).
+      if (!waveActive && graphActive.wave) {
+        waveRb = createRingBuffer(waveRb.cap);
+      }
+      if (!specActive && graphActive.spec) {
+        specRb = createRingBuffer(specRb.cap);
+      }
+      graphActive.wave = waveActive;
+      graphActive.spec = specActive;
+
+      // Build typed arrays only for active graphs (null otherwise).
+      const wave = waveActive ? new Float32Array(msg.wave) : null;
+      const spec = specActive ? new Float32Array(msg.spec) : null;
       if (!frozen) {
-        ringPush(waveRb, wave);
-        ringPush(specRb, spec);
+        if (waveActive) ringPush(waveRb, wave);
+        if (specActive) ringPush(specRb, spec);
       }
       latestRms = msg.rms || 0;
       lastServerTs = msg.t;
@@ -389,11 +457,42 @@
     if (url) connect(url);
   });
 
-  // ── Drawing ──
-  let lastDrawnWaveLen = 0;
-  let lastDrawnSpecLen = 0;
+  // ── Per-graph enable/disable toggles ──
+  // Local mirror of the server's manual enable state for each graph. The
+  // server is authoritative (it also force-disables both during extraction),
+  // so we send our intent and let the server echo the effective state back via
+  // the config hello / stats. We keep a local guess for instant button feel.
+  const graphManual = { wave: true, spec: true };
 
-  function drawWaveform() {
+  function setGraphToggle(graph, on) {
+    const btn = graph === 'wave' ? toggleWaveBtn : toggleSpecBtn;
+    if (!btn) return;
+    btn.textContent = (graph === 'wave' ? 'Wave' : 'Spec') + ': ' + (on ? 'On' : 'Off');
+    btn.classList.toggle('off', !on);
+    graphManual[graph] = on;
+  }
+
+  function toggleGraph(graph) {
+    const next = !graphManual[graph];
+    setGraphToggle(graph, next);
+    // Apply immediately (don't wait a round-trip): pause + dump that graph's
+    // ring so it stops filling right now. The server remains authoritative for
+    // the extraction-batch gate, which overrides via incoming frames.
+    graphActive[graph] = next;
+    if (!next) {
+      if (graph === 'wave') waveRb = createRingBuffer(waveRb.cap);
+      else specRb = createRingBuffer(specRb.cap);
+    }
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'graph', graph: graph, enabled: next }));
+    }
+  }
+
+  if (toggleWaveBtn) toggleWaveBtn.addEventListener('click', () => toggleGraph('wave'));
+  if (toggleSpecBtn) toggleSpecBtn.addEventListener('click', () => toggleGraph('spec'));
+
+  // ── Drawing helpers (full redraw) ──
+  function drawWaveformFull() {
     const { w, h } = waveSize;
     const n = cfg.waveformPoints;
     const cap = waveRb.cap;
@@ -409,7 +508,6 @@
     wctx.beginPath(); wctx.moveTo(0, h / 2); wctx.lineTo(w, h / 2); wctx.stroke();
 
     if (visibleCount === 0) {
-      lastDrawnWaveLen = 0;
       drawWaveMeter(h);
       return;
     }
@@ -429,7 +527,6 @@
       }
       wctx.stroke();
     }
-    lastDrawnWaveLen = visibleCount;
     drawWaveMeter(h);
   }
 
@@ -458,7 +555,7 @@
     wmctx.fillText(db.toFixed(0) + ' dB', mw / 2, h / 2);
   }
 
-  function drawSpectrogram() {
+  function drawSpectrogramFull() {
     const { w, h } = specSize;
     const n = cfg.spectrogramBins;
     const cap = specRb.cap;
@@ -472,7 +569,6 @@
     sctx.fillRect(0, 0, w, h);
 
     if (visibleCount === 0) {
-      lastDrawnSpecLen = 0;
       drawFreqMeter(h, n);
       return;
     }
@@ -491,7 +587,6 @@
         sctx.fillRect(x, y, colW + 1, h / n + 1);
       }
     }
-    lastDrawnSpecLen = visibleCount;
     drawFreqMeter(h, n);
   }
 
@@ -517,6 +612,38 @@
     }
   }
 
+  // ── Incremental drawing ──
+  let lastDrawnWaveLen = 0;
+  let lastDrawnSpecLen = 0;
+
+  function drawWaveform() {
+    if (frozen) {
+      const { w, h } = waveSize;
+      wctx.fillStyle = '#0f0a18';
+      wctx.fillRect(0, 0, w, h);
+      wctx.strokeStyle = 'rgba(61,45,97,0.6)';
+      wctx.lineWidth = 1;
+      wctx.beginPath(); wctx.moveTo(0, h / 2); wctx.lineTo(w, h / 2); wctx.stroke();
+      drawWaveMeter(h);
+      return;
+    }
+    drawWaveformFull();
+  }
+
+  function drawSpectrogram() {
+    if (frozen) {
+      const { w, h } = specSize;
+      sctx.fillStyle = '#0f0a18';
+      sctx.fillRect(0, 0, w, h);
+      sctx.strokeStyle = 'rgba(61,45,97,0.6)';
+      sctx.lineWidth = 1;
+      sctx.beginPath(); sctx.moveTo(0, h / 2); sctx.lineTo(w, h / 2); sctx.stroke();
+      drawFreqMeter(h, cfg.spectrogramBins);
+      return;
+    }
+    drawSpectrogramFull();
+  }
+
   function updateMeters() {
     if (fpsVal) fpsVal.textContent = currentFps;
     rmsVal.textContent = latestRms.toFixed(3);
@@ -533,8 +660,11 @@
   }
 
   function loop() {
-    drawWaveform();
-    drawSpectrogram();
+    // Skip drawing a disabled graph entirely: its ring is already dumped (see
+    // onmessage) so there is nothing to render, and skipping saves CPU on the
+    // mini PC. The last frame stays frozen on screen until re-enabled.
+    if (graphActive.wave) drawWaveform();
+    if (graphActive.spec) drawSpectrogram();
     updateMeters();
     requestAnimationFrame(loop);
   }
@@ -544,6 +674,263 @@
   if (!wsUrlInput.value) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     wsUrlInput.value = proto + '://' + location.hostname + ':8092';
+  }
+
+  // ── Stems panel ──────────────────────────────────────────────────────
+  const refreshStemsBtn = document.getElementById('refreshStemsBtn');
+  const toggleStemServiceBtn = document.getElementById('toggleStemServiceBtn');
+  const extractNowBtn = document.getElementById('extractNowBtn');
+  const clearStemsBtn = document.getElementById('clearStemsBtn');
+  const stemList = document.getElementById('stemList');
+  const stemStats = document.getElementById('stemStats');
+  const stemServiceStatus = document.getElementById('stemServiceStatus');
+  const stemExceptions = document.getElementById('stemExceptions');
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+  let stemServiceEnabled = false;
+
+  function setDropStatus(text, color) {
+    if (!dropZone) return;
+    dropZone.style.borderColor = color || '#3d2d61';
+    const hint = dropZone.querySelector('.hint');
+    if (hint) hint.textContent = text;
+  }
+
+  async function uploadWavFile(file) {
+    if (!file || !file.name.toLowerCase().endsWith('.wav')) {
+      alert('Please select a .wav file');
+      return;
+    }
+    setDropStatus('Uploading ' + file.name + ' ...', '#ffd23f');
+    try {
+      const base = (location.protocol === 'https:' ? 'https' : 'http') + '://' + location.hostname + ':8093';
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(base + '/upload', {
+        method: 'POST',
+        body: form,
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error('HTTP ' + res.status + ': ' + text);
+      }
+      const data = await res.json();
+      setDropStatus('Saved ' + data.saved + (data.stem_extraction_queued ? ' · extraction queued' : '') + ' · drop another file', '#12f012');
+      refreshStems();
+    } catch (e) {
+      setDropStatus('Upload failed: ' + e.message + ' · try again', '#ff4d4d');
+    }
+  }
+
+  if (dropZone) {
+    dropZone.addEventListener('click', () => fileInput && fileInput.click());
+    dropZone.addEventListener('dragover', (ev) => {
+      ev.preventDefault();
+      setDropStatus('Drop .wav file here', '#7a2fff');
+    });
+    dropZone.addEventListener('dragleave', () => {
+      setDropStatus('Drop a .wav file here or click to load', '#3d2d61');
+    });
+    dropZone.addEventListener('drop', (ev) => {
+      ev.preventDefault();
+      const file = ev.dataTransfer.files[0];
+      uploadWavFile(file);
+    });
+  }
+
+  if (fileInput) {
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      if (file) uploadWavFile(file);
+      fileInput.value = '';
+    });
+  }
+
+  async function postJson(path, body) {
+    const base = (location.protocol === 'https:' ? 'https' : 'http') + '://' + location.hostname + ':8093';
+    const res = await fetch(base + path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body || {}),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }
+
+  function updateStemServiceUI(enabled) {
+    stemServiceEnabled = enabled;
+    if (toggleStemServiceBtn) {
+      toggleStemServiceBtn.textContent = enabled ? 'Stop Service' : 'Start Service';
+    }
+    if (stemServiceStatus) {
+      stemServiceStatus.textContent = enabled
+        ? 'offline extraction · service running'
+        : 'offline extraction · service stopped';
+    }
+  }
+
+  if (toggleStemServiceBtn) {
+    toggleStemServiceBtn.addEventListener('click', async () => {
+      try {
+        const data = await postJson('/stems/toggle', { enabled: !stemServiceEnabled });
+        updateStemServiceUI(data.enabled);
+      } catch (e) {
+        alert('Failed to toggle stem service: ' + e.message);
+      }
+    });
+  }
+
+  if (extractNowBtn) {
+    extractNowBtn.addEventListener('click', async () => {
+      try {
+        const data = await postJson('/stems/extract');
+        // Server force-disables BOTH graphs for the whole batch (per KODE.md).
+        // Clear the canvases now for immediate feedback; they repopulate when
+        // the batch finishes and the server re-enables the graphs.
+        if (data.queued > 0) {
+          wctx.fillRect(0, 0, waveSize.w, waveSize.h);
+          sctx.fillRect(0, 0, specSize.w, specSize.h);
+          if (stemServiceStatus) {
+            stemServiceStatus.textContent = 'extracting · both graphs disabled until done';
+          }
+        }
+        alert('Queued extraction for ' + data.queued + ' segments');
+        refreshStems();
+      } catch (e) {
+        alert('Failed to start extraction: ' + e.message);
+      }
+    });
+  }
+
+  if (clearStemsBtn) {
+    clearStemsBtn.addEventListener('click', async () => {
+      if (!confirm('Clear all stored stems? This cannot be undone.')) return;
+      try {
+        const data = await postJson('/stems/clear');
+        alert('Cleared ' + data.cleared + ' segments');
+        refreshStems();
+      } catch (e) {
+        alert('Failed to clear stems: ' + e.message);
+      }
+    });
+  }
+
+  async function refreshStems() {
+    if (!stemList) return;
+    stemList.innerHTML = '<span class="hint">loading...</span>';
+    try {
+      const base = (location.protocol === 'https:' ? 'https' : 'http') + '://' + location.hostname + ':8093';
+      const res = await fetch(base + '/stems');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      if (stemStats && data.stats) {
+        const ids = Object.keys(data.segments || {});
+        let stemCount = 0;
+        for (const sid of ids) stemCount += Object.keys((data.segments[sid].stems) || {}).length;
+        let txt = 'backend=' + data.stats.backend + ' usage=' + data.stats.usage_pct +
+          '% · ' + ids.length + ' segments · ' + stemCount + ' stems';
+        if (data.stats.graphs_disabled) {
+          txt += ' · ⏸ both graphs disabled (extracting)';
+        } else if (data.stats.graphs_paused) {
+          txt += ' · ⏸ graphs paused (extracting)';
+        }
+        // Reflect effective per-graph on/off state in the header toggles.
+        if (data.stats.graph_states) {
+          const gs = data.stats.graph_states;
+          setGraphToggle('wave', gs.wave_active !== false && gs.wave_manual !== false);
+          setGraphToggle('spec', gs.spec_active !== false && gs.spec_manual !== false);
+          const off = [];
+          if (!gs.wave_active) off.push('wave');
+          if (!gs.spec_active) off.push('spec');
+          if (off.length) txt += ' · graphs off: ' + off.join(', ');
+        }
+        stemStats.textContent = txt;
+      }
+      if (data.service_enabled !== undefined) {
+        updateStemServiceUI(data.service_enabled);
+      }
+      renderExceptions(data.exceptions || []);
+      renderStems(data.segments || {});
+    } catch (e) {
+      stemList.innerHTML = '<span class="hint">failed: ' + e.message + '</span>';
+    }
+  }
+
+  function renderExceptions(exceptions) {
+    if (!stemExceptions) return;
+    if (!exceptions.length) {
+      stemExceptions.innerHTML = '';
+      return;
+    }
+    let html = '';
+    for (const ex of exceptions.slice().reverse()) {
+      const ts = new Date(ex.time * 1000).toLocaleTimeString();
+      html += '<div style="font-size:11px; color:#ff4d4d; padding:2px 0;">' +
+              '<span style="color:#c8c9d4;">' + ts + '</span> ' +
+              '<span style="color:#f3f3f7;">' + escapeHtml(ex.segment_id) + '</span>: ' +
+              escapeHtml(ex.error) + '</div>';
+    }
+    stemExceptions.innerHTML = html;
+  }
+
+  function escapeHtml(text) {
+    if (text == null) return '';
+    return String(text)
+      .replace(/&/g, '&')
+      .replace(/</g, '<')
+      .replace(/>/g, '>')
+      .replace(/"/g, '"');
+  }
+
+  // Lightweight render: one compact row per segment folder, stem names as text
+  // only. We deliberately do NOT embed an <audio> control per stem — with many
+  // folders that instantiates hundreds of media elements and is wasteful on a
+  // CPU-only box. A single player is created lazily only when a row is clicked.
+  function renderStems(segments) {
+    if (!stemList) return;
+    const ids = Object.keys(segments).sort().reverse();
+    if (!ids.length) {
+      stemList.innerHTML = '<span class="hint">no stems yet. they are generated automatically when segments are saved.</span>';
+      return;
+    }
+    let html = '';
+    for (const sid of ids) {
+      const seg = segments[sid];
+      const stems = seg.stems || {};
+      const stemNames = Object.keys(stems);
+      if (!stemNames.length) continue;
+      html += '<div class="stem-row" data-seg="' + sid + '" style="border:1px solid #3d2d61; border-radius:8px; padding:6px 10px; background:#1a1230; cursor:pointer;">';
+      html += '<div style="font-size:12px; color:#c8c9d4;">' + sid + ' <span style="color:#7d7e8c;">(' + stemNames.length + ' stems)</span></div>';
+      html += '<div class="stem-names" style="font-size:11px; color:#9aa; margin-top:2px;">' + stemNames.sort().join(', ') + '</div>';
+      html += '<div class="stem-player" style="display:none; margin-top:6px;"></div>';
+      html += '</div>';
+    }
+    stemList.innerHTML = html || '<span class="hint">no stems available</span>';
+
+    // Lazy single player: only build audio elements on demand (click), so the
+    // panel stays cheap regardless of how many stems exist.
+    stemList.querySelectorAll('.stem-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const player = row.querySelector('.stem-player');
+        if (player.dataset.open === '1') { player.style.display = 'none'; player.dataset.open = '0'; return; }
+        const seg = segments[row.dataset.seg] || {};
+        const stems = seg.stems || {};
+        let ph = '';
+        for (const name of Object.keys(stems).sort()) {
+          const url = seg.segment_path ? seg.segment_path.replace(/\/[^/]*$/, '/' + name + '.wav') : '';
+          ph += '<div style="display:flex; align-items:center; gap:8px; font-size:12px; padding:2px 0;">' +
+                '<span style="width:90px; color:#f3f3f7;">' + name + '</span>' +
+                '<audio controls src="' + url + '" style="height:28px; flex:1;"></audio></div>';
+        }
+        player.innerHTML = ph;
+        player.style.display = 'block';
+        player.dataset.open = '1';
+      });
+    });
+  }
+
+  if (refreshStemsBtn) {
+    refreshStemsBtn.addEventListener('click', refreshStems);
   }
 })();
 </script>
