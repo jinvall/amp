@@ -71,6 +71,75 @@ def test_receiver_touches_monitor_before_visualizer_processing():
     assert fake_feed.events == [('feed_pcm', 4)]
 
 
+def test_live_monitor_retries_partial_writes_to_avoid_chop():
+    monitor = audio_receiver.LiveAudioMonitor(sample_rate=44100)
+
+    class FakeStdin:
+        def __init__(self):
+            self.chunks = []
+
+        def write(self, data):
+            chunk = bytes(data[:3])
+            self.chunks.append(chunk)
+            return len(chunk)
+
+        def flush(self):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeProc:
+        def __init__(self):
+            self.stdin = FakeStdin()
+
+    monitor._cmd = ['fake-monitor']
+    monitor._proc = FakeProc()
+    monitor.is_enabled = True
+
+    monitor.feed(b'\x00\x01\x02\x03\x04\x05')
+
+    assert monitor.total_written == 6
+    assert sum(len(chunk) for chunk in monitor._proc.stdin.chunks) == 6
+
+
+def test_live_monitor_prefers_default_alsa_device_for_deploys():
+    monitor = audio_receiver.LiveAudioMonitor(sample_rate=44100)
+    cmd = monitor._choose_command()
+    assert cmd is not None
+    assert 'default' in cmd or 'ffplay' in cmd
+    assert 'hw:0,0' not in cmd
+
+
+def test_live_monitor_prefers_low_latency_streaming_when_ffplay_exists():
+    monitor = audio_receiver.LiveAudioMonitor(sample_rate=44100)
+    cmd = monitor._choose_command()
+    if cmd and cmd[0] == 'ffplay':
+        joined = ' '.join(cmd)
+        assert 'nobuffer' in joined or 'low_delay' in joined
+
+
+def test_receiver_preserves_pcm_that_arrives_after_config_newline():
+    receiver = audio_receiver.AudioReceiver(host='127.0.0.1', port=0, control_port=0)
+
+    class FakeSocket:
+        def __init__(self):
+            self.payload = b'{"amplification": 2}\n\x00\x01\x02\x03'
+            self.index = 0
+
+        def recv(self, n):
+            if self.index >= len(self.payload):
+                return b''
+            data = self.payload[self.index:self.index + n]
+            self.index += len(data)
+            return data
+
+    config, leftover = receiver._read_config(FakeSocket())
+
+    assert config == {"amplification": 2}
+    assert leftover == b'\x00\x01\x02\x03'
+
+
 def test_main_ui_has_monitor_toggle_control():
     index_path = os.path.join(ROOT, 'web', 'index.html')
     with open(index_path, 'r', encoding='utf-8') as fh:

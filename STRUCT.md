@@ -96,3 +96,19 @@ hunt for a free slot inside 8090..8099 if busy.
 - Android app needs rebuild for broken-pipe crash fix.
 - Both sides must run independently; critical failure → graceful shutdown +
   log offered. (Receiver side implemented; Android side pending rebuild.)
+
+## 11. Desktop Launcher
+
+A single desktop launcher icon starts the entire AMP stack (everything except
+the Android side, which runs on the phone).
+
+| Item | Path | Purpose |
+|------|------|---------|
+| Launcher script | `~/amp/launchers/amp.sh` | Starts receiver, waits for web UI, opens browser |
+| App entry | `~/.local/share/applications/amp.desktop` | Appears in app menu |
+| Desktop shortcut | `~/Desktop/amp.desktop` | Desktop icon |
+
+The launcher script:
+1. Starts the receiver via `start_receiver.sh` (background)
+2. Waits for the web UI to become available (poll `/` up to 10s)
+3. Opens the browser at `http://localhost:8093`

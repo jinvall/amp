@@ -142,8 +142,13 @@ class DemucsBackend(StemBackend):
                     break
 
         # Load source once for the residual / target SR.
-        with wave.open(source_path, "rb") as w:
-            sr = w.getframerate()
+        if source_path.lower().endswith('.flac'):
+            import soundfile as sf
+            info = sf.info(source_path)
+            sr = info.samplerate
+        else:
+            with wave.open(source_path, "rb") as w:
+                sr = w.getframerate()
         src_mono = cls._load_wav_mono(source_path, target_sr=sr)
 
         stems_written = {}

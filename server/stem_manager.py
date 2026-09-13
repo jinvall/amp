@@ -206,8 +206,12 @@ class StemManager:
             if not os.path.isdir(stem_dir):
                 continue
             segment_path = os.path.join(
-                ar.OUTPUT_DIR, f"{segment_id}.wav"
+                ar.OUTPUT_DIR, f"{segment_id}.flac"
             )
+            if not os.path.exists(segment_path):
+                segment_path = os.path.join(
+                    ar.OUTPUT_DIR, f"{segment_id}.wav"
+                )
             duration = self._probe_duration(segment_path) if os.path.exists(segment_path) else 0
             stems = {}
             if os.path.isdir(stem_dir):
@@ -234,13 +238,14 @@ class StemManager:
     @staticmethod
     def _probe_duration(path):
         try:
-            import wave
-            with wave.open(path, "rb") as w:
-                return w.getnframes() / float(w.getframerate())
+            if path.lower().endswith('.flac'):
+                import soundfile as sf
+                info = sf.info(path)
+                return info.duration
+            else:
+                import wave
+                with wave.open(path, "rb") as w:
+                    return w.getnframes() / float(w.getframerate())
         except Exception as e:
-            # Swallowing here would let a corrupt/truncated segment report 0s
-            # and skew rotation accounting silently. Log it so the cause is
-            # visible, but still fall back to 0 (caller treats unknown as "drop
-            # first" which is the safe direction for the cap).
             print(f"[stem] _probe_duration failed for {path}: {e}")
             return 0

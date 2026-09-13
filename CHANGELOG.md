@@ -284,3 +284,28 @@ now-working UI. Flagged, not done.
   render loop at ~30fps — `setTimeout` fires even when the tab is hidden or
   the device screen is off, so the graphs continue rendering as a
   belt-and-suspenders fix.
+
+## 2026-09-10 (session: tools module + single desktop launcher)
+### Added
+- **Audio Tools module** (`tools/`) — full audio processing toolkit with:
+  - `BaseFilter` interface, `FilterChain` for sequential processing
+  - Noise cancellation (spectral gating + Wiener filtering)
+  - Spectral difference (spectral subtraction)
+  - Voice removal, voice isolation
+  - Adaptive ambient noise removal
+  - Feature extraction (RMS, ZCR, spectral centroid, rolloff, optional MFCC)
+  - Filter parameter registry for UI sliders
+  - Audio reader/writer for batch processing
+  - LiveProcessor for live monitoring integration
+- **Single desktop launcher** (`AMP Silver`) that starts the entire stack:
+  - One icon launches everything (receiver, visualizer, tools, stems)
+  - Android side excluded (runs on the phone, not the desktop)
+  - Launcher script: `~/amp/launchers/amp.sh`
+  - App entry: `~/.local/share/applications/amp.desktop`
+  - Desktop shortcut: `~/Desktop/amp.desktop`
+  - Starts via `start_receiver.sh`, waits for web UI, opens browser
+
+### Verified
+- All 19 tools Python files compile clean
+- Desktop launcher created and trusted (executable)
+- STRUCT.md updated with launcher info
