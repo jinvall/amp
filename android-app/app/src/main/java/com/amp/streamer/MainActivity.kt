@@ -64,17 +64,19 @@ class MainActivity : AppCompatActivity() {
         binding.etServerPort.setText(prefs.getInt(KEY_SERVER_PORT, DEFAULT_SERVER_PORT).toString())
 
         // Restore persisted slider positions (defaults if none saved).
-        binding.sbAmplification.progress = prefs.getInt(KEY_AMP, 100)
-        binding.sbGainCeiling.progress = prefs.getInt(KEY_CEILING, 50)
+        // Keep the default audio path transparent: no gain, no EQ, no input shaping
+        // unless the user explicitly adjusts the controls.
+        binding.sbAmplification.progress = prefs.getInt(KEY_AMP, 0)
+        binding.sbGainCeiling.progress = prefs.getInt(KEY_CEILING, 0)
         binding.sbPreGain.progress = prefs.getInt(KEY_PREGain, 0)
         binding.sbEq1.progress = prefs.getInt(KEY_EQ1, 50)
         binding.sbEq2.progress = prefs.getInt(KEY_EQ2, 50)
         binding.sbEq3.progress = prefs.getInt(KEY_EQ3, 50)
         binding.sbEq4.progress = prefs.getInt(KEY_EQ4, 50)
         binding.sbEq5.progress = prefs.getInt(KEY_EQ5, 50)
-        binding.sbBreathingSensitivity.progress = prefs.getInt(KEY_SENS, 80)
-        binding.sbCooldown.progress = prefs.getInt(KEY_COOLDOWN, 20)
-        binding.sbNoiseGate.progress = prefs.getInt(KEY_NOISEGATE, 10)
+        binding.sbBreathingSensitivity.progress = prefs.getInt(KEY_SENS, 0)
+        binding.sbCooldown.progress = prefs.getInt(KEY_COOLDOWN, 0)
+        binding.sbNoiseGate.progress = prefs.getInt(KEY_NOISEGATE, 0)
         binding.sbSegmentDuration.progress = prefs.getInt(KEY_SEGMENT, 50)
 
         // Audio source spinner: populate from service's source map, restore selection.
@@ -425,13 +427,15 @@ class MainActivity : AppCompatActivity() {
         private const val MIN_EQ_DB = -12.0
         private const val MAX_EQ_DB = 12.0
 
-        fun amplificationFromProgress(progress: Int): Float = 1.0f + (progress / 100.0f) * 99.0f
-        fun sensitivityFromProgress(progress: Int): Double = (progress / 100.0) * MAX_SENSITIVITY
-        fun cooldownFromProgress(progress: Int): Double = (progress / 100.0) * MAX_COOLDOWN
+        // Keep the default signal transparent while still allowing intentional
+        // gain/EQ adjustments. The 50% midpoint is the neutral point.
+        fun amplificationFromProgress(progress: Int): Float = 1.0f + ((progress / 100.0f) * 1.5f)
+        fun sensitivityFromProgress(progress: Int): Double = ((progress - 50) / 100.0) * MAX_SENSITIVITY
+        fun cooldownFromProgress(progress: Int): Double = ((progress - 50) / 100.0) * MAX_COOLDOWN
         fun segmentDurationFromProgress(progress: Int): Int = (MIN_SEGMENT_DURATION_MIN + (progress / 100.0) * (MAX_SEGMENT_DURATION_MIN - MIN_SEGMENT_DURATION_MIN)).toInt()
-        fun noiseGateFromProgress(progress: Int): Int = progress * 10
+        fun noiseGateFromProgress(progress: Int): Int = ((progress - 50) * 10).coerceIn(0, 500)
         fun gainCeilingFromProgress(progress: Int): Float = MIN_GAIN_CEILING + (progress / 100.0f) * (MAX_GAIN_CEILING - MIN_GAIN_CEILING)
-        fun preGainFromProgress(progress: Int): Float = MIN_PRE_GAIN + (progress / 100.0f) * (MAX_PRE_GAIN - MIN_PRE_GAIN)
-        fun eqBandFromProgress(progress: Int): Float = (MIN_EQ_DB + (progress / 100.0f) * (MAX_EQ_DB - MIN_EQ_DB)).toFloat()
+        fun preGainFromProgress(progress: Int): Float = 1.0f + (progress / 100.0f) * 2.0f
+        fun eqBandFromProgress(progress: Int): Float = (((progress - 50) / 100.0f) * (MAX_EQ_DB - MIN_EQ_DB)).toFloat() + MIN_EQ_DB
     }
 }

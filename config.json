@@ -1,6 +1,6 @@
 {
-  "amplification": 64.36,
-  "breathing_cooldown": 2,
-  "breathing_sensitivity": 46,
-  "segment_duration_min": 3
+  "amplification": 1,
+  "breathing_cooldown": 10,
+  "breathing_sensitivity": 98,
+  "segment_duration_min": 1
 }

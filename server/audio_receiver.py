@@ -72,6 +72,7 @@ SEGMENT_BYTES = SEGMENT_DURATION_SEC * BYTES_PER_SECOND   # 26,460,000
 STEP_BYTES = STEP_SEC * BYTES_PER_SECOND                   # 26,049,000
 
 MAX_STORAGE_SECONDS = 60 * 60  # 1 hour
+MAX_STORAGE_BYTES = 6 * 1024 * 1024 * 1024  # 6 GiB cumulative cap
 OUTPUT_DIR = 'audio_segments'
 
 # Breathing detection config (defaults; overridden by config.json / client)
@@ -178,10 +179,11 @@ def _config_hash(cfg):
 class StorageManager:
     """FIFO storage: keep total duration under MAX_STORAGE_SECONDS."""
 
-    def __init__(self, output_dir, max_seconds):
+    def __init__(self, output_dir, max_seconds=None, max_bytes=None):
         self.output_dir = output_dir
-        self.max_seconds = max_seconds
-        self.segments = []  # list of (filepath, duration_sec)
+        self.max_seconds = max_seconds or 0
+        self.max_bytes = max_bytes or MAX_STORAGE_BYTES
+        self.segments = []  # list of (filepath, duration_sec, size_bytes)
         # Index files that already exist on disk so a restart does not "forget"
         # them and let storage grow unbounded. Without this, pruning only ever
         # saw segments saved in the current process and the backlog never shrank.
@@ -190,12 +192,16 @@ class StorageManager:
 
     @staticmethod
     def _probe_duration(path):
-        """Real WAV duration (seconds). Returns 0 on any failure (0 is treated
-        as 'drop first' so a corrupt file can't inflate the cap)."""
+        """Real duration (seconds) for WAV or FLAC. Returns 0 on any failure."""
         try:
-            import wave
-            with wave.open(path, "rb") as w:
-                return w.getnframes() / float(w.getframerate())
+            if path.lower().endswith('.flac'):
+                import soundfile as sf
+                info = sf.info(path)
+                return info.duration
+            else:
+                import wave
+                with wave.open(path, "rb") as w:
+                    return w.getnframes() / float(w.getframerate())
         except Exception as e:
             print(f"[{datetime.now().isoformat()}] StorageManager._probe_duration failed for {path}: {e}")
             return 0
@@ -215,26 +221,32 @@ class StorageManager:
         # Oldest first so FIFO eviction order is correct after a restart.
         files.sort(key=lambda p: os.path.getmtime(p))
         for p in files:
-            self.segments.append((p, self._probe_duration(p)))
+            dur = self._probe_duration(p)
+            sz = os.path.getsize(p) if os.path.exists(p) else 0
+            self.segments.append((p, dur, sz))
 
     def add_segment(self, filepath, duration_sec=None):
         # Prefer the real on-disk duration; fall back to the caller's estimate.
         dur = self._probe_duration(filepath) if os.path.exists(filepath) else (duration_sec or 0)
         if dur <= 0 and duration_sec:
             dur = duration_sec
-        self.segments.append((filepath, dur))
+        sz = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+        self.segments.append((filepath, dur, sz))
         self._prune()
 
     def _prune(self):
-        total = sum(d for _, d in self.segments)
-        while total > self.max_seconds and self.segments:
-            old_path, old_dur = self.segments.pop(0)
+        total_dur = sum(d for _, d, _ in self.segments)
+        total_bytes = sum(s for _, _, s in self.segments)
+        while ((self.max_seconds > 0 and total_dur > self.max_seconds) or
+               (self.max_bytes > 0 and total_bytes > self.max_bytes)) and self.segments:
+            old_path, old_dur, old_sz = self.segments.pop(0)
             try:
                 os.remove(old_path)
-                print(f"Pruned: {old_path} ({old_dur:.1f}s)")
+                print(f"Pruned: {old_path} ({old_dur:.1f}s, {old_sz} bytes)")
             except OSError as e:
                 print(f"Prune failed: {e}")
-            total -= old_dur
+            total_dur -= old_dur
+            total_bytes -= old_sz
 
 
 class BreathingDetector:
@@ -466,20 +478,28 @@ class LiveAudioMonitor:
         if not self._audio_device_available():
             return None
 
-        if shutil.which('aplay'):
-            try:
-                result = subprocess.run(['aplay', '-l'], capture_output=True, text=True, timeout=3)
-                if result.returncode == 0:
-                    out = (result.stdout or '') + '\n' + (result.stderr or '')
-                    lowered = out.lower()
-                    if 'device 0:' in lowered and 'analog' in lowered:
-                        return ['aplay', '-D', 'hw:0,0', '-q', '-f', 'S16_LE', '-r', str(self.sample_rate), '-c', str(self.channels), '-']
-            except Exception:
-                pass
-            return ['aplay', '-q', '-f', 'S16_LE', '-r', str(self.sample_rate), '-c', str(self.channels), '-']
-
         if shutil.which('ffplay'):
-            return ['ffplay', '-loglevel', 'quiet', '-nodisp', '-autoexit', '-f', 's16le', '-ar', str(self.sample_rate), '-ac', str(self.channels), '-i', 'pipe:0']
+            # ffplay is the lowest-latency choice here; keep it aggressively
+            # real-time and avoid extra buffering or blocking decode delay.
+            return [
+                'ffplay',
+                '-loglevel', 'quiet',
+                '-nodisp',
+                '-autoexit',
+                '-fflags', 'nobuffer',
+                '-flags', 'low_delay',
+                '-framedrop',
+                '-f', 's16le',
+                '-ar', str(self.sample_rate),
+                '-ac', str(self.channels),
+                '-i', 'pipe:0',
+            ]
+
+        if shutil.which('aplay'):
+            # Fall back to ALSA default device. This keeps output working even on
+            # machines with non-deterministic card ordering.
+            return ['aplay', '-D', 'default', '-q', '-f', 'S16_LE', '-r', str(self.sample_rate), '-c', str(self.channels), '-']
+
         if shutil.which('paplay'):
             return ['paplay', '--format=s16le', '--rate=' + str(self.sample_rate), '--channels=' + str(self.channels)]
         return None
@@ -520,9 +540,33 @@ class LiveAudioMonitor:
             try:
                 if self._proc is None or self._proc.stdin is None:
                     return
-                written = self._proc.stdin.write(pcm_bytes)
+
+                # The raw PCM stream is continuous; partial writes are normal when
+                # the sink buffers or blocks briefly. If we only count the first
+                # fragment, the rest is silently dropped and the monitor sounds
+                # choppy or stuttery. Retry until the whole payload is accepted.
+                remaining = bytes(pcm_bytes)
+                total_written = 0
+                while remaining:
+                    try:
+                        written = self._proc.stdin.write(remaining)
+                    except (BrokenPipeError, OSError):
+                        try:
+                            if self._proc is not None and self._proc.stdin is not None:
+                                self._proc.stdin.close()
+                        except Exception:
+                            pass
+                        self._proc = None
+                        return
+
+                    if written <= 0:
+                        raise RuntimeError('audio monitor write returned 0 bytes')
+
+                    total_written += written
+                    remaining = remaining[written:]
+
                 self._proc.stdin.flush()
-                self.total_written += written
+                self.total_written += total_written
             except Exception:
                 try:
                     if self._proc is not None and self._proc.stdin is not None:
@@ -575,10 +619,12 @@ class VisualizerFeed:
         self._clients_lock = None   # asyncio.Lock, created in _run_server (loop-scoped)
         self.running = False
         self._loop = None
-        # Global monitoring enable flag. When disabled, the feed stops analyzing
-        # and queueing frames entirely; the browser retains the last rendered data
-        # until monitoring is re-enabled.
+        # Global monitoring enable flag. Default to ON so the live audio path is
+        # active immediately on startup; it can still be toggled off from the UI
+        # or control channel when needed.
         self._monitoring_enabled = True
+        # Auto-start audio monitor so speakers work without UI connection
+        self.audio_monitor.set_enabled(True)
         # Per-graph manual enable flags (independent waveform / spectrogram
         # toggles driven from the web UI). Default both ON.
         self._wave_enabled = True
@@ -812,17 +858,16 @@ class VisualizerFeed:
         async def main_async():
             self._loop = asyncio.get_running_loop()
             self._out_queue = asyncio.Queue(maxsize=120)  # ~2.4 s of frames of headroom
-            # Disable server-initiated keepalive pings: this is a one-way frame
-            # push (server -> browser) and the browser does not ping back. With
-            # pings enabled, the connection task blocked on `async for raw in ws:`
-            # never services the pong, so the server killed every client with
-            # "1011 keepalive ping timeout; no close frame received" -> nothing
-            # ever got delivered. close_timeout=None lets in-flight frames drain.
+            # Keep the WS connection alive while the browser is idle. The earlier
+            # attempt to disable pings caused the socket to be silently dropped by
+            # intermediaries/NATs, which surfaced as abrupt 1005/1006 closes even
+            # though the app itself was still healthy. Keep a moderate heartbeat so
+            # dead peers are detected and reconnected without breaking the stream.
             async with websockets.serve(
                 handler, self.host, self.port,
                 max_size=2 ** 20,
-                ping_interval=None,
-                ping_timeout=None,
+                ping_interval=20,
+                ping_timeout=20,
                 close_timeout=None,
             ):
                 print(f"Visualizer WebSocket listening on {self.host}:{self.port} "
@@ -850,6 +895,15 @@ class AudioReceiver:
         self.storage = StorageManager(self.output_dir, MAX_STORAGE_SECONDS)
 
         self.ring_buffer = bytearray()
+
+        # Noise suppression for recorded audio (make saved files cleaner)
+        self.noise_suppressor = None
+        try:
+            from noise_suppression import SpectralGateSuppressor
+            self.noise_suppressor = SpectralGateSuppressor(SAMPLE_RATE)
+            print(f"[{datetime.now().isoformat()}] Noise suppression enabled (SpectralGate)")
+        except Exception as e:
+            print(f"[{datetime.now().isoformat()}] Noise suppression disabled: {e}")
         self.bytes_since_last_segment = 0
         self.segment_index = 0
         self.running = False
@@ -867,6 +921,17 @@ class AudioReceiver:
                                        analyzer=VisualizerAnalyzer(SAMPLE_RATE))
         self._control_clients = set()
 
+        # Live audio processor (filter chain for monitoring + recording)
+        self.live_processor = None
+        try:
+            from tools.live.live_processor import LiveProcessor
+            self.live_processor = LiveProcessor(sample_rate=SAMPLE_RATE)
+            print(f"[{datetime.now().isoformat()}] LiveProcessor initialized")
+        except Exception as e:
+            print(f"[{datetime.now().isoformat()}] LiveProcessor disabled: {e}")
+
+        # HTTP stream buffer for /stream endpoint
+        self.stream_buffer = StreamBuffer(max_seconds=2, sample_rate=SAMPLE_RATE)
         # WAV segment config
         self._wav_output_dir = OUTPUT_DIR
         os.makedirs(self._wav_output_dir, exist_ok=True)
@@ -1054,20 +1119,38 @@ class AudioReceiver:
             return False
 
     def _save_segment(self, pcm_data):
-        """Save segment as WAV."""
+        """Save segment as FLAC with noise suppression."""
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"segment_{ts}_{self.segment_index:04d}.wav"
+        filename = f"segment_{ts}_{self.segment_index:04d}.flac"
         filepath = os.path.join(self._wav_output_dir, filename)
 
         try:
-            with wave.open(filepath, 'wb') as wf:
-                wf.setnchannels(CHANNELS)
-                wf.setsampwidth(SAMPLE_WIDTH)
-                wf.setframerate(SAMPLE_RATE)
-                wf.writeframes(bytes(pcm_data))
+            # Apply noise suppression to make recorded audio cleaner
+            processed = pcm_data
+            if self.noise_suppressor is not None:
+                try:
+                    processed = self.noise_suppressor.process(bytes(pcm_data))
+                except Exception as e:
+                    print(f"[{datetime.now().isoformat()}] noise suppression failed: {e}")
+                    processed = pcm_data
+
+            # Stabilize: normalize levels to prevent clipping and ensure consistent volume
+            import numpy as np
+            audio_arr = np.frombuffer(processed, dtype=np.int16).astype(np.float32)
+            peak = np.max(np.abs(audio_arr))
+            if peak > 0:
+                # Normalize to -3dB (prevents clipping while maintaining headroom)
+                target = 32767 * 0.707  # -3dB
+                audio_arr = (audio_arr * (target / peak)).astype(np.int16)
+            processed = audio_arr.tobytes()
+
+            # Save as FLAC (lossless compression, ~50% size reduction vs WAV)
+            import soundfile as sf
+            audio = np.frombuffer(processed, dtype=np.int16).astype(np.float32) / 32768.0
+            sf.write(filepath, audio, SAMPLE_RATE, format='FLAC')
             self.storage.add_segment(filepath, self.segment_duration_sec)
             print(f"[{datetime.now().isoformat()}] Saved: {filename} "
-                  f"({len(pcm_data)} bytes, {self.segment_duration_sec}s)")
+                  f"({len(processed)} bytes, {self.segment_duration_sec}s)")
 
             # Async stem extraction — never block the audio path.
             if self.stem_manager is not None and self.stem_extraction_enabled:
@@ -1193,6 +1276,12 @@ class AudioReceiver:
                     print(f"[{datetime.now().isoformat()}] monitor feed error (ignored): {e}")
 
             self.ring_buffer.extend(data)
+            # Feed stream buffer for /stream endpoint
+            if hasattr(self, 'stream_buffer') and self.stream_buffer is not None:
+                try:
+                    self.stream_buffer.write(data)
+                except Exception as e:
+                    print(f"[{datetime.now().isoformat()}] stream_buffer write error: {e}")
             self.bytes_since_last_segment += len(data)
 
             # Breathing detection
@@ -1245,20 +1334,27 @@ class AudioReceiver:
                     print(f"[{datetime.now().isoformat()}] Config from {addr} had no effect "
                           f"(unknown/empty keys or apply failed): {config}")
 
-            queue = queue_module.Queue(maxsize=4)
+            queue = queue_module.Queue(maxsize=32)
             worker = threading.Thread(target=self._process_queue, args=(queue,), daemon=True)
             worker.start()
 
+            def queue_chunk(data):
+                # Do not discard the first PCM burst during the initial connect.
+                # Prefer bounded backpressure over silent loss so the audio stream
+                # does not start with a gap when the client connects and sends the
+                # config line + first audio bytes in one packet.
+                if not data:
+                    return
+                while self.running:
+                    try:
+                        queue.put(data, timeout=0.1)
+                        return
+                    except queue_module.Full:
+                        continue
+
             # If any PCM bytes arrived together with the config line, queue them first.
             if leftover:
-                if not queue.full():
-                    queue.put_nowait(leftover)
-                else:
-                    try:
-                        queue.get_nowait()
-                        queue.put_nowait(leftover)
-                    except Exception as e:
-                        print(f"[{datetime.now().isoformat()}] client_queue: dropped leftover PCM: {e}")
+                queue_chunk(leftover)
 
             # Receive audio stream
             while self.running:
@@ -1273,14 +1369,7 @@ class AudioReceiver:
                     break
                 if self.bytes_since_last_segment % (BYTES_PER_SECOND * 5) < len(chunk):
                     print(f"[{datetime.now().isoformat()}] recv={len(chunk)} bytes")
-                if not queue.full():
-                    queue.put_nowait(chunk)
-                else:
-                    try:
-                        queue.get_nowait()
-                        queue.put_nowait(chunk)
-                    except Exception as e:
-                        print(f"[{datetime.now().isoformat()}] client_queue: dropped PCM chunk: {e}")
+                queue_chunk(chunk)
         except Exception as e:
             print(f"[{datetime.now().isoformat()}] Client {addr} error: {e}")
         finally:
@@ -1587,3 +1676,26 @@ if __name__ == '__main__':
               file=sys.stderr)
         sys.exit(1)
 
+
+class StreamBuffer:
+    """Thread-safe ring buffer for streaming raw PCM to HTTP clients."""
+    def __init__(self, max_seconds=2, sample_rate=44100):
+        self.max_bytes = max_seconds * sample_rate * 2
+        self._buffer = bytearray()
+        self._lock = threading.Lock()
+        self._event = threading.Event()
+
+    def write(self, pcm_bytes):
+        with self._lock:
+            self._buffer.extend(pcm_bytes)
+            if len(self._buffer) > self.max_bytes:
+                del self._buffer[:len(self._buffer) - self.max_bytes]
+            self._event.set()
+
+    def read(self, timeout=0.5):
+        self._event.wait(timeout)
+        with self._lock:
+            data = bytes(self._buffer)
+            self._buffer.clear()
+            self._event.clear()
+            return data

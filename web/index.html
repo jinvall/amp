@@ -82,6 +82,11 @@
   #waveform { height: 220px; padding-right: 52px; }
   #spectrogram { height: 320px; padding-right: 52px; }
   .hint { font-size: 11px; color: var(--color-text-muted); }
+  .source-ip {
+    font-family: monospace; font-size: 11px; color: #ffd23f;
+    background: #1a1230; border: 1px solid #3d2d61; border-radius: 6px;
+    padding: 4px 8px; min-width: 80px; text-align: center;
+  }
   .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .buffer-control { display: inline-flex; align-items: center; gap: 6px; }
   .buffer-control input[type=range] { width: 90px; }
@@ -99,6 +104,7 @@
     padding: 5px 10px; font-size: 12px; width: 180px;
   }
 </style>
+<link rel="stylesheet" href="editor.css" />
 </head>
 <body>
 <header>
@@ -111,8 +117,12 @@
   <div class="toolbar">
     <input id="wsUrl" type="text" value="" placeholder="ws://host:8092" />
     <button id="connectBtn">Connect</button>
+    <button id="connectSilver" style="margin-left:4px;font-size:11px" title="Connect to silver (10.0.0.147:8092)">Silver</button>
+    <button id="toggleMonitoring" title="Toggle live monitoring">Monitoring: On</button>
     <button id="toggleWaveBtn" title="Toggle waveform graph">Wave: On</button>
     <button id="toggleSpecBtn" title="Toggle spectrogram graph">Spec: On</button>
+    <span id="sourceIp" class="source-ip" title="Source IP">—</span>
+    <button id="recordBtn" title="Record live audio">⏺ Record</button>
   </div>
   <div class="spacer"></div>
   <div class="meter">
@@ -123,6 +133,7 @@
     <span id="budgetVal" class="hint"></span>
   </div>
 </header>
+<div id="connBanner" style="display:none;background:#ff5555;color:white;padding:6px 16px;font-size:13px;z-index:9999;text-align:center"></div>
 
 <main>
   <div class="panel">
@@ -190,6 +201,84 @@
       <div id="stemList" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
     </div>
   </div>
+  <!-- Tools panel -->
+  <div class="panel" id="toolsPanel">
+    <div class="label">
+      <span>Audio Tools</span>
+      <span class="hint" id="toolsStatus">filters offline</span>
+      <span class="toolbar">
+        <button id="toolsToggleBtn" class="filter-toggle off">Enable Filters</button>
+        <button id="toolsPreviewBtn">Preview</button>
+        <button id="toolsSaveBtn">Save Processed</button>
+        <button id="toolsRefreshBtn">Refresh</button>
+      </span>
+    </div>
+    <div style="padding:10px 12px;">
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+        <button class="filter-btn" data-filter="noise_cancellation">Noise Cancellation</button>
+        <button class="filter-btn" data-filter="spectral_difference">Spectral Difference</button>
+        <button class="filter-btn" data-filter="voice_removal">Voice Removal</button>
+        <button class="filter-btn" data-filter="voice_isolation">Voice Isolation</button>
+        <button class="filter-btn" data-filter="ambient_removal">Ambient Removal</button>
+        <button class="filter-btn" data-filter="feature_options">Feature Extraction</button>
+        <button class="filter-btn" data-filter="compressor">Compressor</button>
+        <button class="filter-btn" data-filter="agc">AGC</button>
+        <button class="filter-btn" data-filter="wind_noise">Wind Removal</button>
+        <button class="filter-btn" data-filter="deesser">De-Esser</button>
+        <button class="filter-btn" data-filter="equalizer">Equalizer</button>
+      </div>
+      <div id="toolsParams" style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;"></div>
+      <div id="toolsFeatures" style="display:none; border-top:1px solid #3d2d61; padding-top:8px;">
+        <div style="font-size:12px; color:#c8c9d4; margin-bottom:6px;">Feature Readouts</div>
+        <div id="toolsFeaturesList" style="font-size:11px; color:#9aa; display:grid; grid-template-columns:repeat(3,1fr); gap:4px;"></div>
+      </div>
+      <div style="border-top:1px solid #3d2d61; padding-top:8px; margin-top:8px;">
+        <div style="font-size:12px; color:#c8c9d4; margin-bottom:6px;">Batch Processing</div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <select id="toolsSegmentSelect" style="flex:1; background:#1a1230; color:#f3f3f7; border:1px solid #3d2d61; border-radius:6px; padding:6px;">
+            <option value="">Select a segment...</option>
+          </select>
+          <button id="toolsBatchBtn">Process</button>
+        </div>
+        <div id="toolsBatchStatus" style="font-size:11px; color:#9aa; margin-top:4px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Editor Panel -->
+  <div id="editorToggleBar" style="padding:6px 18px; display:flex; align-items:center; gap:10px; border-top:1px solid var(--color-border);">
+    <button id="editorToggleBtn" class="editor-btn">Editor ▾</button>
+    <span class="hint">File editor: filters, transcription, stems, MIDI</span>
+  </div>
+  <div id="editorContainer"></div>
+  <script>
+    (function() {
+      const ct = document.getElementById("editorContainer");
+      const btn = document.getElementById("editorToggleBtn");
+      const bar = document.getElementById("editorToggleBar");
+      let loaded = false;
+      let open = false;
+      function toggleEditor() {
+        open = !open;
+        ct.style.display = open ? "block" : "none";
+        btn.textContent = open ? "Editor ▴" : "Editor ▾";
+        if (open && !loaded) {
+          fetch("/editor.html").then(r => r.text()).then(html => {
+            ct.innerHTML = html;
+            loaded = true;
+            // Show the panel (it starts display:none in editor.html)
+            const ep = document.getElementById("editorPanel");
+            if (ep) ep.style.display = "block";
+            // Init editor JS
+            const s = document.createElement("script");
+            s.src = "/editor.js?v=" + Date.now();
+            document.body.appendChild(s);
+          }).catch(e => { ct.innerHTML = "<div class=\"editor-result-empty\">Failed to load editor: " + e.message + "</div>"; });
+        }
+      }
+      if (btn) btn.addEventListener("click", toggleEditor);
+    })();
+  </script>
 </main>
 
 <script>
@@ -220,6 +309,7 @@
   const connectBtn = document.getElementById('connectBtn');
   const wsUrlInput = document.getElementById('wsUrl');
   const colormapSel = document.getElementById('colormap');
+  const toggleMonitoringBtn = document.getElementById('toggleMonitoring');
   const toggleWaveBtn = document.getElementById('toggleWaveBtn');
   const toggleSpecBtn = document.getElementById('toggleSpecBtn');
 
@@ -377,16 +467,41 @@
     statusDot.classList.remove('live');
     if (state === 'live') statusDot.classList.add('live');
     statusDot.title = label || state;
+    const errEl = document.getElementById('connErr');
+    if (errEl && state === 'down') errEl.textContent = '  ' + label;
+    if (errEl && state === 'live') errEl.textContent = '';
+    const banner = document.getElementById('connBanner');
+    if (banner) {
+      if (state === 'live') { banner.style.display = 'none'; }
+      else if (state === 'down') { banner.style.display = 'block'; banner.textContent = '⚠ Connection lost: ' + label; }
+      else if (state === 'connecting') { banner.style.display = 'block'; banner.style.background = '#ffaa00'; banner.textContent = 'Connecting...'; }
+    }
   }
 
   function connect(url) {
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
     if (ws) { try { ws.close(); } catch (e) {} }
-    setStatus('connecting', 'connecting…');
-    ws = new WebSocket(url);
+    setStatus('connecting', 'connecting… ' + url);
+    const errEl = document.getElementById('connErr');
+    if (errEl) errEl.textContent = '';
+    try {
+      ws = new WebSocket(url);
+    } catch (e) {
+      setStatus('down', 'WS create failed');
+      if (errEl) errEl.textContent = '  ' + e.message;
+      return;
+    }
     ws.onopen = () => { wsRetry = 0; setStatus('live', 'connected'); };
-    ws.onclose = () => {
-      setStatus('down', 'disconnected — retrying');
+    ws.onclose = (ev) => {
+      const transient = ev.code === 1005 || ev.code === 1006 || !ev.reason;
+      const reason = ev.reason || (ev.code === 1006 ? 'connection refused' : 'code ' + ev.code);
+      if (transient) {
+        setStatus('connecting', 'reconnecting… ' + reason);
+        if (errEl) errEl.textContent = '  ' + reason;
+      } else {
+        setStatus('down', 'disconnected — ' + reason);
+        if (errEl) errEl.textContent = '  ' + reason;
+      }
       // Backoff: 0.5s, 1s, 2s, 4s … capped at 8s.
       wsRetry = Math.min(wsRetry + 1, 6);
       const delay = Math.min(500 * Math.pow(2, wsRetry - 1), 8000);
@@ -398,7 +513,15 @@
       if (msg.type === 'config') {
         Object.assign(cfg, msg);
         budgetVal.textContent = 'budget ' + cfg.budgetMs.toFixed(0) + 'ms';
-        // Sync the per-graph toggle buttons with the server's state.
+        // Display source IP (streaming client)
+        if (msg.source_ip) {
+          const el = document.getElementById('sourceIp');
+          if (el) el.textContent = msg.source_ip;
+        }
+        // Sync the server state back to the UI controls.
+        if (typeof msg.monitoring === 'boolean') {
+          setMonitoringToggle(msg.monitoring);
+        }
         if (msg.graph_states) {
           setGraphToggle('wave', msg.graph_states.wave_active !== false && msg.graph_states.wave_manual !== false);
           setGraphToggle('spec', msg.graph_states.spec_active !== false && msg.graph_states.spec_manual !== false);
@@ -456,6 +579,13 @@
     const url = wsUrlInput.value.trim();
     if (url) connect(url);
   });
+  const connectSilverBtn = document.getElementById('connectSilver');
+  if (connectSilverBtn) {
+    connectSilverBtn.addEventListener('click', () => {
+      wsUrlInput.value = 'ws://10.0.0.147:8092';
+      connect('ws://10.0.0.147:8092');
+    });
+  }
 
   // ── Per-graph enable/disable toggles ──
   // Local mirror of the server's manual enable state for each graph. The
@@ -463,6 +593,14 @@
   // so we send our intent and let the server echo the effective state back via
   // the config hello / stats. We keep a local guess for instant button feel.
   const graphManual = { wave: true, spec: true };
+  let monitoringEnabled = true;
+
+  function setMonitoringToggle(on) {
+    monitoringEnabled = !!on;
+    if (!toggleMonitoringBtn) return;
+    toggleMonitoringBtn.textContent = 'Monitoring: ' + (monitoringEnabled ? 'On' : 'Off');
+    toggleMonitoringBtn.classList.toggle('off', !monitoringEnabled);
+  }
 
   function setGraphToggle(graph, on) {
     const btn = graph === 'wave' ? toggleWaveBtn : toggleSpecBtn;
@@ -470,6 +608,14 @@
     btn.textContent = (graph === 'wave' ? 'Wave' : 'Spec') + ': ' + (on ? 'On' : 'Off');
     btn.classList.toggle('off', !on);
     graphManual[graph] = on;
+  }
+
+  function toggleMonitoring() {
+    const next = !monitoringEnabled;
+    setMonitoringToggle(next);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'monitor', enabled: next }));
+    }
   }
 
   function toggleGraph(graph) {
@@ -488,6 +634,7 @@
     }
   }
 
+  if (toggleMonitoringBtn) toggleMonitoringBtn.addEventListener('click', toggleMonitoring);
   if (toggleWaveBtn) toggleWaveBtn.addEventListener('click', () => toggleGraph('wave'));
   if (toggleSpecBtn) toggleSpecBtn.addEventListener('click', () => toggleGraph('spec'));
 
@@ -690,8 +837,12 @@
   // Auto-connect using current host + default viz port if no URL provided.
   if (!wsUrlInput.value) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    wsUrlInput.value = proto + '://' + location.hostname + ':8092';
+    const host = (location.hostname || '10.0.0.147');
+    wsUrlInput.value = proto + '://' + host + ':8092';
   }
+  // Auto-connect on load
+  const autoUrl = wsUrlInput.value.trim();
+  if (autoUrl) connect(autoUrl);
 
   // ── Stems panel ──────────────────────────────────────────────────────
   const refreshStemsBtn = document.getElementById('refreshStemsBtn');
@@ -720,7 +871,7 @@
     }
     setDropStatus('Uploading ' + file.name + ' ...', '#ffd23f');
     try {
-      const base = (location.protocol === 'https:' ? 'https' : 'http') + '://' + location.hostname + ':8093';
+      const base = (location.protocol === 'https:' ? 'https' : 'http') + '://' + (location.hostname || '10.0.0.147') + ':8093';
       const form = new FormData();
       form.append('file', file);
       const res = await fetch(base + '/upload', {
@@ -764,7 +915,7 @@
   }
 
   async function postJson(path, body) {
-    const base = (location.protocol === 'https:' ? 'https' : 'http') + '://' + location.hostname + ':8093';
+    const base = (location.protocol === 'https:' ? 'https' : 'http') + '://' + (location.hostname || '10.0.0.147') + ':8093';
     const res = await fetch(base + path, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -836,7 +987,7 @@
     if (!stemList) return;
     stemList.innerHTML = '<span class="hint">loading...</span>';
     try {
-      const base = (location.protocol === 'https:' ? 'https' : 'http') + '://' + location.hostname + ':8093';
+      const base = (location.protocol === 'https:' ? 'https' : 'http') + '://' + (location.hostname || '10.0.0.147') + ':8093';
       const res = await fetch(base + '/stems');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
@@ -949,7 +1100,282 @@
   if (refreshStemsBtn) {
     refreshStemsBtn.addEventListener('click', refreshStems);
   }
+
+  // ── Tools panel ──────────────────────────────────────────────────────
+  const toolsToggleBtn = document.getElementById("toolsToggleBtn");
+  const toolsPreviewBtn = document.getElementById("toolsPreviewBtn");
+  const toolsSaveBtn = document.getElementById("toolsSaveBtn");
+  const toolsRefreshBtn = document.getElementById("toolsRefreshBtn");
+  const toolsStatus = document.getElementById("toolsStatus");
+  const toolsParams = document.getElementById("toolsParams");
+  const toolsFeatures = document.getElementById("toolsFeatures");
+  const toolsFeaturesList = document.getElementById("toolsFeaturesList");
+  const toolsSegmentSelect = document.getElementById("toolsSegmentSelect");
+  const toolsBatchBtn = document.getElementById("toolsBatchBtn");
+  const toolsBatchStatus = document.getElementById("toolsBatchStatus");
+  const filterBtns = document.querySelectorAll(".filter-btn");
+  let toolsEnabled = false;
+  let activeFilters = new Set();
+  let filterParams = {};
+  const FILTER_REGISTRY = {
+    noise_cancellation: {
+      strength: {type:"float", min:0, max:1, default:0.5, label:"Strength"},
+      noise_floor_db: {type:"float", min:0, max:30, default:1.5, label:"Noise Floor (dB)"},
+      attenuation_db: {type:"float", min:0, max:40, default:9, label:"Attenuation (dB)"}
+    },
+    spectral_difference: {
+      noise_frames: {type:"int", min:5, max:100, default:30, label:"Noise Frames"},
+      reduction_amount: {type:"float", min:0, max:1, default:0.8, label:"Reduction"},
+      smoothing: {type:"float", min:0, max:0.95, default:0.5, label:"Smoothing"}
+    },
+    voice_removal: {
+      voice_low_hz: {type:"int", min:20, max:500, default:80, label:"Low Freq (Hz)"},
+      voice_high_hz: {type:"int", min:1000, max:8000, default:4000, label:"High Freq (Hz)"},
+      attenuation_db: {type:"float", min:0, max:40, default:20, label:"Attenuation (dB)"}
+    },
+    voice_isolation: {
+      voice_low_hz: {type:"int", min:20, max:500, default:80, label:"Low Freq (Hz)"},
+      voice_high_hz: {type:"int", min:1000, max:8000, default:4000, label:"High Freq (Hz)"},
+      preserve_db: {type:"float", min:0, max:10, default:0, label:"Preserve (dB)"},
+      attenuate_db: {type:"float", min:0, max:40, default:18, label:"Attenuate (dB)"}
+    },
+    ambient_removal: {
+      adaptation_rate: {type:"float", min:0.01, max:0.5, default:0.05, label:"Adaptation Rate"},
+      reduction_db: {type:"float", min:0, max:30, default:12, label:"Reduction (dB)"},
+      sensitivity: {type:"float", min:0.5, max:5, default:1.5, label:"Sensitivity"}
+    },
+    feature_options: {},
+    compressor: {
+      threshold_db: {type:"float", min:-60, max:0, default:-20, label:"Threshold (dB)"},
+      ratio: {type:"float", min:1, max:20, default:4, label:"Ratio"},
+      attack_ms: {type:"float", min:0.1, max:100, default:5, label:"Attack (ms)"},
+      release_ms: {type:"float", min:10, max:1000, default:50, label:"Release (ms)"},
+      makeup_gain_db: {type:"float", min:0, max:30, default:6, label:"Makeup Gain (dB)"}
+    },
+    agc: {
+      target_rms: {type:"float", min:0.01, max:0.5, default:0.1, label:"Target RMS"},
+      attack_ms: {type:"float", min:10, max:1000, default:200, label:"Attack (ms)"},
+      release_ms: {type:"float", min:100, max:5000, default:1000, label:"Release (ms)"},
+      max_gain_db: {type:"float", min:0, max:60, default:30, label:"Max Gain (dB)"},
+      min_gain_db: {type:"float", min:-40, max:0, default:-20, label:"Min Gain (dB)"}
+    },
+    wind_noise: {
+      cutoff_hz: {type:"float", min:40, max:500, default:80, label:"Cutoff (Hz)"},
+      strength: {type:"float", min:0, max:1, default:0.7, label:"Strength"}
+    },
+    deesser: {
+      freq_low_hz: {type:"float", min:2000, max:8000, default:4000, label:"Low Freq (Hz)"},
+      freq_high_hz: {type:"float", min:5000, max:16000, default:10000, label:"High Freq (Hz)"},
+      threshold_db: {type:"float", min:-60, max:0, default:-30, label:"Threshold (dB)"},
+      reduction_db: {type:"float", min:0, max:30, default:12, label:"Reduction (dB)"}
+    },
+    equalizer: {
+      band_32hz: {type:"float", min:-12, max:12, default:0, label:"32 Hz"},
+      band_64hz: {type:"float", min:-12, max:12, default:0, label:"64 Hz"},
+      band_125hz: {type:"float", min:-12, max:12, default:0, label:"125 Hz"},
+      band_250hz: {type:"float", min:-12, max:12, default:0, label:"250 Hz"},
+      band_500hz: {type:"float", min:-12, max:12, default:0, label:"500 Hz"},
+      band_1khz: {type:"float", min:-12, max:12, default:0, label:"1 kHz"},
+      band_2khz: {type:"float", min:-12, max:12, default:0, label:"2 kHz"},
+      band_4khz: {type:"float", min:-12, max:12, default:0, label:"4 kHz"},
+      band_8khz: {type:"float", min:-12, max:12, default:0, label:"8 kHz"},
+      band_16khz: {type:"float", min:-12, max:12, default:0, label:"16 kHz"}
+    }
+  };
+  function updateToolsStatus(text) { if (toolsStatus) toolsStatus.textContent = text; }
+  function renderFilterParams() {
+    if (!toolsParams) return;
+    toolsParams.innerHTML = "";
+    if (activeFilters.size === 0) {
+      toolsParams.innerHTML = "<span class='hint'>Select a filter above to configure its parameters.</span>";
+      return;
+    }
+    for (const fname of activeFilters) {
+      const params = FILTER_REGISTRY[fname];
+      if (!params || Object.keys(params).length === 0) continue;
+
+      // Special rendering for equalizer: vertical band sliders
+      if (fname === "equalizer") {
+        const eqContainer = document.createElement("div");
+        eqContainer.style.cssText = "border:1px solid #3d2d61; border-radius:6px; padding:8px; margin-bottom:8px;";
+        eqContainer.innerHTML = "<div style='font-size:11px; color:#7a2fff; margin-bottom:8px; font-weight:bold;'>10-Band Equalizer</div>";
+        const sliderRow = document.createElement("div");
+        sliderRow.style.cssText = "display:flex; align-items:flex-end; justify-content:space-between; gap:4px; height:120px;";
+        const bandDefs = [
+          {name:'32', key:'band_32hz'},
+          {name:'64', key:'band_64hz'},
+          {name:'125', key:'band_125hz'},
+          {name:'250', key:'band_250hz'},
+          {name:'500', key:'band_500hz'},
+          {name:'1k', key:'band_1khz'},
+          {name:'2k', key:'band_2khz'},
+          {name:'4k', key:'band_4khz'},
+          {name:'8k', key:'band_8khz'},
+          {name:'16k', key:'band_16khz'}
+        ];
+        bandDefs.forEach((band, idx) => {
+          const col = document.createElement("div");
+          col.style.cssText = "display:flex; flex-direction:column; align-items:center; flex:1;";
+          const slider = document.createElement("input");
+          slider.type = "range";
+          slider.min = -12;
+          slider.max = 12;
+          slider.step = 0.5;
+          slider.value = filterParams["equalizer." + band.key] ?? 0;
+          slider.style.cssText = "writing-mode: bt-lr; -webkit-appearance: slider-vertical; width:20px; height:80px;";
+          slider.dataset.band = idx;
+          slider.addEventListener("input", (e) => {
+            const gain = parseFloat(e.target.value);
+            filterParams["equalizer." + band.key] = gain;
+            valDisplay.textContent = (gain >= 0 ? "+" : "") + gain.toFixed(1) + " dB";
+            sendFilterConfig();
+          });
+          const valDisplay = document.createElement("div");
+          valDisplay.style.cssText = "font-size:9px; color:#aaa; margin-top:2px;";
+          valDisplay.textContent = ((filterParams["equalizer." + band.key] ?? 0) >= 0 ? "+" : "") + (filterParams["equalizer." + band.key] ?? 0).toFixed(1) + " dB";
+          const label = document.createElement("div");
+          label.style.cssText = "font-size:10px; color:#7a2fff; margin-top:2px;";
+          label.textContent = band.name;
+          col.appendChild(slider);
+          col.appendChild(valDisplay);
+          col.appendChild(label);
+          sliderRow.appendChild(col);
+        });
+        eqContainer.appendChild(sliderRow);
+        const resetBtn = document.createElement("button");
+        resetBtn.textContent = "Reset EQ";
+        resetBtn.style.cssText = "margin-top:6px; background:#3d2d61; color:#fff; border:none; border-radius:4px; padding:4px 8px; cursor:pointer; font-size:11px;";
+        resetBtn.addEventListener("click", () => {
+          bandDefs.forEach(b => { filterParams["equalizer." + b.key] = 0; });
+          sliderRow.querySelectorAll("input[type=range]").forEach(s => { s.value = 0; });
+          sliderRow.querySelectorAll("div").forEach(d => {
+            if (d.style.fontSize === "9px") d.textContent = "+0.0 dB";
+          });
+          sendFilterConfig();
+        });
+        eqContainer.appendChild(resetBtn);
+        toolsParams.appendChild(eqContainer);
+        continue;
+      }
+
+      const div = document.createElement("div");
+      div.style.cssText = "border:1px solid #3d2d61; border-radius:6px; padding:6px 8px;";
+      div.innerHTML = "<div style='font-size:11px; color:#7a2fff; margin-bottom:4px;'>" + fname + "</div>";
+      for (const [pname, pdef] of Object.entries(params)) {
+        const row = document.createElement("div");
+        row.className = "param-row";
+        const lbl = document.createElement("label");
+        lbl.textContent = pdef.label;
+        const inp = document.createElement("input");
+        inp.type = "range";
+        inp.min = pdef.min; inp.max = pdef.max;
+        inp.step = pdef.type === "int" ? 1 : (pdef.max - pdef.min) / 100;
+        inp.value = filterParams[fname + "." + pname] !== undefined ? filterParams[fname + "." + pname] : pdef.default;
+        const val = document.createElement("span");
+        val.className = "val"; val.textContent = inp.value;
+        inp.oninput = () => { val.textContent = inp.value; filterParams[fname + "." + pname] = parseFloat(inp.value); sendFilterConfig(); };
+        row.append(lbl, inp, val); div.append(row);
+      }
+      toolsParams.append(div);
+    }
+  }
+  function sendFilterConfig() {
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({type:"tools", enabled: toolsEnabled, filters: Array.from(activeFilters), params: filterParams}));
+  }
+  function sendToolsCommand(cmd, extra) {
+    if (!ws || ws.readyState !== 1) { alert("Not connected to server."); return; }
+    ws.send(JSON.stringify(Object.assign({type:"tools_cmd", cmd: cmd}, extra || {})));
+  }
+  if (toolsToggleBtn) toolsToggleBtn.onclick = () => {
+    toolsEnabled = !toolsEnabled;
+    toolsToggleBtn.textContent = toolsEnabled ? "Disable Filters" : "Enable Filters";
+    toolsToggleBtn.className = toolsEnabled ? "filter-toggle on" : "filter-toggle off";
+    updateToolsStatus(toolsEnabled ? "filters active: " + Array.from(activeFilters).join(", ") : "filters offline");
+    sendFilterConfig();
+  };
+  if (toolsPreviewBtn) toolsPreviewBtn.onclick = () => sendToolsCommand("preview");
+  if (toolsSaveBtn) toolsSaveBtn.onclick = () => sendToolsCommand("save");
+  if (toolsRefreshBtn) toolsRefreshBtn.onclick = () => sendToolsCommand("refresh");
+  if (toolsBatchBtn) toolsBatchBtn.onclick = () => {
+    const seg = toolsSegmentSelect.value;
+    if (!seg) { alert("Select a segment first."); return; }
+    sendToolsCommand("batch", {segment: seg});
+  };
+  filterBtns.forEach(btn => {
+    btn.onclick = () => {
+      const f = btn.dataset.filter;
+      if (activeFilters.has(f)) { activeFilters.delete(f); btn.classList.remove("active"); }
+      else { activeFilters.add(f); btn.classList.add("active"); }
+      renderFilterParams();
+      if (toolsEnabled) sendFilterConfig();
+      updateToolsStatus(toolsEnabled ? "filters active: " + Array.from(activeFilters).join(", ") : "filters offline");
+    };
+  });
+  renderFilterParams();
+  updateToolsStatus("filters offline");
 })();
 </script>
+
+<script>
+/* ── Record Button ─────────────────────────────────────────────────── */
+(function() {
+  const recordBtn = document.getElementById("recordBtn");
+  if (!recordBtn) return;
+  let isRecording = false;
+  let mediaRecorder = null;
+  let recordedChunks = [];
+  let streamReader = null;
+
+  recordBtn.addEventListener("click", async () => {
+    if (!isRecording) {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const dest = audioCtx.createMediaStreamDestination();
+        mediaRecorder = new MediaRecorder(dest.stream, { mimeType: "audio/webm;codecs=opus" });
+        recordedChunks = [];
+        mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(recordedChunks, { type: "audio/webm" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          const ts = new Date().toISOString().slice(0,19).replace(/:/g,"-");
+          a.download = "amp_recording_" + ts + ".webm";
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          recordedChunks = [];
+        };
+        mediaRecorder.start(100);
+        isRecording = true;
+        recordBtn.textContent = "⏹ Stop";
+        recordBtn.style.color = "#ff4d4d";
+        recordBtn.style.borderColor = "#ff4d4d";
+
+        const resp = await fetch("/stream");
+        if (resp.ok && resp.body) {
+          streamReader = resp.body.getReader();
+          (function pump() {
+            streamReader.read().then(({ done }) => {
+              if (done || !isRecording) { streamReader = null; return; }
+              pump();
+            }).catch(() => { if (isRecording) pump(); });
+          })();
+        }
+      } catch (e) {
+        alert("Recording failed: " + e.message);
+      }
+    } else {
+      isRecording = false;
+      if (streamReader) { streamReader.cancel(); streamReader = null; }
+      if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+      recordBtn.textContent = "⏺ Record";
+      recordBtn.style.color = "";
+      recordBtn.style.borderColor = "";
+    }
+  });
+})();
+</script>
+
 </body>
 </html>

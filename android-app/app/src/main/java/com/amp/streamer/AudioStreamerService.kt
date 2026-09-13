@@ -388,7 +388,7 @@ class AudioStreamerService : Service() {
                     val chunk = queue.poll(100, TimeUnit.MILLISECONDS)
                     if (chunk == null) continue
                     val processedLen = processAudio(chunk, chunk.size, amplifiedBuffer)
-                    bufferedOut?.write(amplifiedBuffer, 0, processedLen)
+                    writeFully(bufferedOut, amplifiedBuffer, processedLen)
                     bytesSent += processedLen
                     totalBytes += processedLen
                     chunks++
@@ -421,6 +421,19 @@ class AudioStreamerService : Service() {
                 android.util.Log.d("AudioStreamer", "Streaming loop ended. Total: $totalBytes bytes in $chunks chunks")
             }
         }.also { it.start() }
+    }
+
+    private fun writeFully(out: java.io.OutputStream?, data: ByteArray, length: Int) {
+        if (out == null || length <= 0) return
+        var offset = 0
+        while (offset < length) {
+            val written = out.write(data, offset, length - offset)
+            if (written <= 0) {
+                throw java.io.IOException("Socket write returned $written bytes")
+            }
+            offset += written
+        }
+        out.flush()
     }
 
     fun stopStreaming() {
@@ -698,6 +711,14 @@ class AudioStreamerService : Service() {
     }
 
     private fun processAudio(input: ByteArray, length: Int, out: ByteArray): Int {
+        val neutralInput = kotlin.math.abs(this.preGain - 1.0f) < 1e-6f
+            && kotlin.math.abs(this.amplification - 1.0f) < 1e-6f
+            && this.eqBands.all { kotlin.math.abs(it) < 1e-6f }
+        if (neutralInput) {
+            System.arraycopy(input, 0, out, 0, length)
+            return length
+        }
+
         val preGain = this.preGain.toDouble()
         val amplification = this.amplification.toDouble()
         var i = 0
@@ -713,9 +734,6 @@ class AudioStreamerService : Service() {
                 fSample = filter.process(fSample)
             }
             fSample *= amplification
-            // Soft clip: tanh-based limiting to [-32767, 32767]. Hard clipping at
-            // integer limits causes harsh distortion; tanh gives a smooth
-            // saturation curve that stays within 16-bit range without crunch.
             val clipped = if (kotlin.math.abs(fSample) > 32767.0) {
                 (kotlin.math.tanh(fSample / 32767.0) * 32767.0).roundToInt()
             } else {
