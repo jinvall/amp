@@ -185,7 +185,8 @@ class AudioStreamerService : Service() {
         val audioFormat = AudioFormat.ENCODING_PCM_16BIT
 
         val minBufSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-        val audioRecordBufferSize = max(minBufSize, 65536)
+        // AudioRecord internal buffer: use minBufSize for hardware compatibility
+        val audioRecordBufferSize = max(minBufSize, 8192)
 
         // Audio source selection: if the user picked a specific source, try it
         // first; otherwise fall back to the auto-priority list. Auto mode tries
@@ -346,12 +347,13 @@ class AudioStreamerService : Service() {
         audioRecord?.startRecording()
         android.util.Log.d("AudioStreamer", "Recording started")
 
-        val queue = ArrayBlockingQueue<ByteArray>(50)
+        val queue = ArrayBlockingQueue<ByteArray>(20)
         val amplifiedBuffer = ByteArray(bufferSize)
 
         Thread {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
-            val buffer = ByteArray(bufferSize)
+            val readBufferSize = 1024  // small read buffer = low latency
+            val buffer = ByteArray(readBufferSize)
             try {
                 while (isStreaming && audioRecord != null) {
                     val read = audioRecord!!.read(buffer, 0, buffer.size)
@@ -378,7 +380,7 @@ class AudioStreamerService : Service() {
 
         streamThread = Thread {
             val socketOutputStream = socket?.getOutputStream()
-            val bufferedOut = socketOutputStream?.let { java.io.BufferedOutputStream(it, 65536) }
+            val bufferedOut = socketOutputStream?.let { java.io.BufferedOutputStream(it, 16384) }
             var chunks = 0
             var totalBytes = 0
             var lastDiagnosticChunks = 0
@@ -426,12 +428,12 @@ class AudioStreamerService : Service() {
     private fun writeFully(out: java.io.OutputStream?, data: ByteArray, length: Int) {
         if (out == null || length <= 0) return
         var offset = 0
+        val chunkSize = 8192
         while (offset < length) {
-            val written = out.write(data, offset, length - offset)
-            if (written <= 0) {
-                throw java.io.IOException("Socket write returned $written bytes")
-            }
-            offset += written
+            val remaining = length - offset
+            val toWrite = if (remaining < chunkSize) remaining else chunkSize
+            out.write(data, offset, toWrite)
+            offset += toWrite
         }
         out.flush()
     }

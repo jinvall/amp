@@ -1,0 +1,20 @@
+# ── AMP Analysis — ML/Audio Requirements ────────────────────────────────────
+# Install into: server/basic-pitch-venv (Python 3.11)
+
+faster-whisper>=1.0.0
+basic-pitch>=0.3.0
+librosa>=0.10.0
+tensorflow>=2.13.0
+onnxruntime>=1.15.0
+mido>=1.2.0
+pretty_midi>=0.2.0
+mir_eval>=0.7.0
+scipy>=1.10.0
+scikit-learn>=1.2.0
+resampy>=0.4.0
+numba>=0.57.0
+audioread>=3.0.0
+pooch>=1.6.0
+numpy>=1.24.0
+soundfile>=0.12.0
+soxr>=0.3.0

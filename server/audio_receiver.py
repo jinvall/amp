@@ -76,7 +76,7 @@ MAX_STORAGE_BYTES = 6 * 1024 * 1024 * 1024  # 6 GiB cumulative cap
 OUTPUT_DIR = 'audio_segments'
 
 # Breathing detection config (defaults; overridden by config.json / client)
-BREATHING_ENABLE = True
+BREATHING_ENABLE = False
 BREATHING_BAND_LOW_HZ = 100.0
 BREATHING_BAND_HIGH_HZ = 3000.0
 BREATHING_ENERGY_THRESHOLD = 1.2e3  # very sensitive for quiet sounds
@@ -288,7 +288,7 @@ class BreathingDetector:
         fft = np.fft.rfft(audio)
         freqs = np.fft.rfftfreq(audio.size, d=1.0 / self.sample_rate)
         mask = (freqs >= self.band_low) & (freqs <= self.band_high)
-        mag = np.abs(fft) ** 2
+        mag = np.abs(fft) ** 2 / audio.size if audio.size > 0 else np.abs(fft) ** 2
         return float(mag[mask].sum()) if np.any(mask) else 0.0
 
 
@@ -595,6 +595,101 @@ class LiveAudioMonitor:
                     pass
 
 
+
+class MasterVolume:
+    """Master gain stage for live audio output."""
+
+    def __init__(self, initial_gain=1.0):
+        self._gain = float(initial_gain)
+        self._lock = threading.Lock()
+
+    @property
+    def gain(self):
+        return self._gain
+
+    @property
+    def gain_db(self):
+        import math
+        return 20.0 * math.log10(max(self._gain, 1e-10))
+
+    def set_gain(self, linear):
+        with self._lock:
+            self._gain = max(0.0, min(2.0, float(linear)))
+
+    def set_gain_db(self, db):
+        import math
+        with self._lock:
+            self._gain = 10.0 ** (float(db) / 20.0)
+            self._gain = max(0.0, min(2.0, self._gain))
+
+    def apply(self, pcm_bytes):
+        if not pcm_bytes:
+            return pcm_bytes
+        with self._lock:
+            gain = self._gain
+        if gain == 1.0:
+            return pcm_bytes
+        import numpy as np
+        samples = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32)
+        samples *= gain
+        return np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
+
+
+# ── Filter factory for live audio processing ──
+# Maps filter name → filter class. Used by VisualizerFeed.set_filter_state()
+# to instantiate filters requested by the browser UI.
+_FILTER_CLASS_MAP = {
+    'noise_cancellation': ('tools.filters.noise_cancellation', 'NoiseCancellationFilter'),
+    'spectral_difference': ('tools.filters.spectral_difference', 'SpectralDifferenceFilter'),
+    'voice_isolation': ('tools.filters.voice_isolation', 'VoiceIsolationFilter'),
+    'voice_removal': ('tools.filters.voice_removal', 'VoiceRemovalFilter'),
+    'ambient_removal': ('tools.filters.ambient_removal', 'AmbientRemovalFilter'),
+    'compressor': ('tools.filters.compressor', 'CompressorFilter'),
+    'agc': ('tools.filters.agc', 'AGCFilter'),
+    'wind_noise': ('tools.filters.wind_noise', 'WindNoiseFilter'),
+    'deesser': ('tools.filters.deesser', 'DeEsserFilter'),
+    'equalizer': ('tools.filters.eq_filter', 'EqualizerFilter'),
+    'feature_options': ('tools.filters.feature_options', 'FeatureOptionsFilter'),
+}
+
+
+def create_live_filter(name, sample_rate, params):
+    """Create a live filter instance by name.
+
+    Args:
+        name: Filter name (e.g. 'noise_cancellation', 'compressor')
+        sample_rate: Audio sample rate in Hz
+        params: Dict of parameter name → value from the UI
+
+    Returns:
+        Filter instance or None if the filter is unknown or fails to instantiate.
+    """
+    entry = _FILTER_CLASS_MAP.get(name)
+    if entry is None:
+        print(f"[{datetime.now().isoformat()}] create_live_filter: unknown filter '{name}'")
+        return None
+    module_path, class_name = entry
+    try:
+        import importlib
+        module = importlib.import_module(module_path)
+        cls = getattr(module, class_name)
+    except Exception as e:
+        print(f"[{datetime.now().isoformat()}] create_live_filter: failed to import {module_path}.{class_name}: {e}")
+        return None
+    try:
+        # Build kwargs from params, falling back to filter defaults
+        kwargs = dict(params or {})
+        # Special handling for equalizer: convert gains list to gains_db
+        if name == 'equalizer':
+            gains = kwargs.pop('gains', None)
+            if gains is not None:
+                kwargs['gains_db'] = gains
+        return cls(sample_rate=sample_rate, **kwargs)
+    except Exception as e:
+        print(f"[{datetime.now().isoformat()}] create_live_filter: failed to create {name}: {e}")
+        return None
+
+
 class VisualizerFeed:
     """Owns the WebSocket server + a thread-safe frame queue.
 
@@ -603,11 +698,13 @@ class VisualizerFeed:
     A separate asyncio thread drains the queue and broadcasts to all WS clients.
     """
 
-    def __init__(self, host=HOST, port=VIZ_PORT, analyzer=None):
+    def __init__(self, host=HOST, port=VIZ_PORT, analyzer=None, live_processor=None):
         self.host = host
         self.port = port
         self.analyzer = analyzer or VisualizerAnalyzer(SAMPLE_RATE)
         self.audio_monitor = LiveAudioMonitor()
+        self.master_volume = MasterVolume(initial_gain=1.0)
+        self.live_processor = live_processor
         self._pcm_ring = bytearray()
         self._frame_samples = self.analyzer.frame_samples
         self._lock = threading.Lock()
@@ -641,6 +738,28 @@ class VisualizerFeed:
         # whole duration of a manual "Extract Now" run, regardless of the
         # manual toggle state. Refcounted so overlapping batches behave.
         self._extract_disable = 0
+        self._filter_state = {
+            'enabled': False,
+            'filters': [],
+            'params': {},
+        }
+        self._startup_monitoring_enabled = True
+
+    def _advertised_host(self):
+        """Return a host browsers can use from another machine."""
+        if self.host not in ('0.0.0.0', '::', ''):
+            return self.host
+        try:
+            import socket
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                probe.connect(('8.8.8.8', 80))
+                return probe.getsockname()[0]
+            finally:
+                probe.close()
+        except Exception:
+            return 'localhost'
+
 
     # ── Called from the receiver's worker thread (real-time path) ──
     def feed_pcm(self, pcm_bytes):
@@ -655,6 +774,20 @@ class VisualizerFeed:
             with self._lock:
                 self._pcm_ring.clear()
             return
+        if self.live_processor is not None:
+            try:
+                pcm_bytes = self.live_processor.process(pcm_bytes)
+            except Exception as e:
+                print(f"[{datetime.now().isoformat()}] live processor error (ignored): {e}")
+        # Feed live audio monitor (speakers) — must happen after filters so the
+        # user hears the processed signal, not the raw input.
+        if self.audio_monitor is not None and self.audio_monitor.is_enabled:
+            try:
+                # Apply master volume (live output only, not recordings)
+                pcm_bytes = self.master_volume.apply(pcm_bytes)
+                self.audio_monitor.feed(pcm_bytes)
+            except Exception as e:
+                print(f"[{datetime.now().isoformat()}] audio monitor feed error (ignored): {e}")
         with self._lock:
             # Resolve effective per-graph state: a graph draws only if it is
             # manually enabled AND not forced off by an active extraction batch.
@@ -670,6 +803,170 @@ class VisualizerFeed:
                 f = self.analyzer.analyze(frame_pcm, sender_ts)
                 if f is not None:
                     self._enqueue(f)
+
+    def _live_filter_names(self):
+        try:
+            from tools.filters.feature_options import get_all_filter_names
+            return set(get_all_filter_names())
+        except Exception as e:
+            print(f"[{datetime.now().isoformat()}] filter registry unavailable: {e}")
+            return set()
+
+    def _filter_definitions(self):
+        """Return filter definitions for the UI."""
+        try:
+            from tools.filters.feature_options import FILTER_PARAM_REGISTRY
+            defs = {}
+            for name, params in FILTER_PARAM_REGISTRY.items():
+                defs[name] = {
+                    'params': params,
+                    'has_calibration': name == 'spectral_difference',
+                }
+            return defs
+        except Exception as e:
+            print(f"[{datetime.now().isoformat()}] filter definitions unavailable: {e}")
+            return {}
+
+    def set_filter_state(self, enabled, filters=None, params=None):
+        """Apply the browser's live filter selection to LiveProcessor."""
+        supported = self._live_filter_names()
+        requested = list(filters or [])
+        filter_names = [name for name in requested if name in supported]
+        rejected = [name for name in requested if name not in supported]
+        if rejected:
+            print(f"[{datetime.now().isoformat()}] unsupported live filters ignored: {rejected}")
+        
+        # Parse flat param keys ("noise_cancellation.strength") into nested dicts
+        # The UI sends flat keys, but create_live_filter expects nested dicts
+        raw_params = dict(params or {})
+        filter_params = {}
+        for key, value in raw_params.items():
+            if '.' in key:
+                fname, pname = key.split('.', 1)
+                if fname not in filter_params:
+                    filter_params[fname] = {}
+                filter_params[fname][pname] = value
+            else:
+                # Already nested or top-level
+                filter_params[key] = value
+        
+        with self._lock:
+            self._filter_state = {
+                'enabled': bool(enabled),
+                'filters': filter_names,
+                'params': filter_params,
+            }
+        processor = self.live_processor
+        if processor is None:
+            print(f"[{datetime.now().isoformat()}] live filter update ignored: LiveProcessor unavailable")
+            return False
+        try:
+            processor.clear_filters()
+            for name in filter_names:
+                filt_params = filter_params.get(name, {})
+                filt = create_live_filter(name, self.analyzer.sample_rate, filt_params)
+                if filt is not None:
+                    processor.add_filter(filt)
+                    print(f"[{datetime.now().isoformat()}] live filter '{name}' created with params: {filt_params}")
+                else:
+                    print(f"[{datetime.now().isoformat()}] live filter '{name}' failed to create")
+            processor.set_active(bool(enabled))
+            print(f"[{datetime.now().isoformat()}] live filters {'enabled' if enabled else 'disabled'}: {filter_names}")
+            return True
+        except Exception as e:
+            print(f"[{datetime.now().isoformat()}] live filter update failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def _handle_filter_cmd(self, msg):
+        """Handle per-filter commands (reset, calibrate, enable, configure)."""
+        cmd = msg.get('cmd', '')
+        name = msg.get('filter', '')
+        processor = self.live_processor
+        if processor is None:
+            return
+        try:
+            if cmd == 'reset':
+                # Reset a specific filter to defaults
+                for filt in processor.chain.filters:
+                    if filt.__class__.__name__.lower().replace('filter', '') == name:
+                        filt.reset()
+                        print(f"[{datetime.now().isoformat()}] filter '{name}' reset")
+                        break
+            elif cmd == 'calibrate':
+                # Trigger recalibration for spectral difference
+                for filt in processor.chain.filters:
+                    if filt.__class__.__name__.lower().replace('filter', '') == name:
+                        if hasattr(filt, 'recalibrate'):
+                            filt.recalibrate()
+                            print(f"[{datetime.now().isoformat()}] filter '{name}' recalibrating")
+                        break
+            elif cmd == 'enable':
+                # Enable/disable a specific filter
+                enabled = bool(msg.get('enabled', True))
+                for filt in processor.chain.filters:
+                    if filt.__class__.__name__.lower().replace('filter', '') == name:
+                        filt.enabled = enabled
+                        print(f"[{datetime.now().isoformat()}] filter '{name}' {'enabled' if enabled else 'disabled'}")
+                        break
+            elif cmd == 'configure':
+                # Configure parameters for a specific filter
+                params = msg.get('params', {})
+                for filt in processor.chain.filters:
+                    if filt.__class__.__name__.lower().replace('filter', '') == name:
+                        filt.configure(**params)
+                        print(f"[{datetime.now().isoformat()}] filter '{name}' configured: {params}")
+                        break
+            else:
+                print(f"[{datetime.now().isoformat()}] unknown filter_cmd: {cmd}")
+        except Exception as e:
+            print(f"[{datetime.now().isoformat()}] filter_cmd error: {e}")
+
+    def filter_state(self):
+        with self._lock:
+            state = dict(self._filter_state)
+            # Add per-filter details
+            if self.live_processor is not None:
+                filters = []
+                for filt in self.live_processor.chain.filters:
+                    fstate = {
+                        'name': filt.__class__.__name__.lower().replace('filter', ''),
+                        'enabled': filt.enabled,
+                        'class': filt.__class__.__name__,
+                    }
+                    # Add calibration state for spectral difference
+                    if hasattr(filt, 'state'):
+                        fstate['calibration'] = filt.state
+                    filters.append(fstate)
+                state['active_filters'] = filters
+            return state
+
+    def _handle_volume_cmd(self, msg):
+        """Handle volume control commands."""
+        cmd = msg.get('cmd', '')
+        if cmd == 'set_gain':
+            gain = float(msg.get('gain', 1.0))
+            self.master_volume.set_gain(gain)
+        elif cmd == 'set_gain_db':
+            db = float(msg.get('db', 0.0))
+            self.master_volume.set_gain_db(db)
+        elif cmd == 'mute':
+            self.master_volume.set_gain(0.0)
+        elif cmd == 'unmute':
+            self.master_volume.set_gain(1.0)
+
+    def _broadcast_filter_state(self, state):
+        loop = self._loop
+        if loop is None:
+            return
+        try:
+            loop.call_soon_threadsafe(self._out_queue.put_nowait, {
+                'type': 'filter_state',
+                'state': state,
+            })
+        except Exception as e:
+            print(f"[{datetime.now().isoformat()}] filter_state enqueue failed: {e}")
 
     def set_monitoring_enabled(self, enabled):
         """Globally enable or disable the live visual + audio monitor feed."""
@@ -785,7 +1082,9 @@ class VisualizerFeed:
 
         self._clients_lock = asyncio.Lock()
 
-        async def handler(ws):
+        # websockets 15+ passes the request path to the handler. Keep a
+        # path argument so the feed works with both old and new releases.
+        async def handler(ws, path=None):
             async with self._clients_lock:
                 self._clients.add(ws)
             try:
@@ -800,6 +1099,13 @@ class VisualizerFeed:
                     "presets": sorted(self.analyzer.PRESETS.keys()),
                     "preset": self.analyzer.preset,
                     "monitoring": self._monitoring_enabled,
+                    "filters": self.filter_state(),
+                    "filter_definitions": self._filter_definitions(),
+                    "volume": {
+                        "gain": self.master_volume.gain,
+                        "gain_db": self.master_volume.gain_db,
+                    },
+                    "source_ip": self._advertised_host(),
                     # Initial graph toggle states so the UI matches the server.
                     "graph_states": self.graph_states(),
                 }))
@@ -827,6 +1133,18 @@ class VisualizerFeed:
                             else:
                                 print(f"[{datetime.now().isoformat()}] viz_handler: "
                                       f"bad graph '{graph}'")
+                        elif msg.get('type') == 'tools':
+                            self.set_filter_state(
+                                bool(msg.get('enabled', False)),
+                                msg.get('filters', []),
+                                msg.get('params', {}),
+                            )
+                        elif msg.get('type') == 'tools_cmd' and msg.get('cmd') == 'refresh':
+                            self._broadcast_filter_state(self.filter_state())
+                        elif msg.get('type') == 'filter_cmd':
+                            self._handle_filter_cmd(msg)
+                        elif msg.get('type') == 'volume':
+                            self._handle_volume_cmd(msg)
             except Exception as e:
                 print(f"[{datetime.now().isoformat()}] viz_handler: connection error: {e}")
             finally:
@@ -857,18 +1175,22 @@ class VisualizerFeed:
 
         async def main_async():
             self._loop = asyncio.get_running_loop()
-            self._out_queue = asyncio.Queue(maxsize=120)  # ~2.4 s of frames of headroom
+            self._out_queue = asyncio.Queue(maxsize=30)  # ~0.6 s of frames of headroom
             # Keep the WS connection alive while the browser is idle. The earlier
             # attempt to disable pings caused the socket to be silently dropped by
             # intermediaries/NATs, which surfaced as abrupt 1005/1006 closes even
             # though the app itself was still healthy. Keep a moderate heartbeat so
             # dead peers are detected and reconnected without breaking the stream.
+            # Bind explicitly to all interfaces when configured that way. This
+            # is required for browsers running on another machine; localhost-only
+            # binds make the WebSocket appear reachable while connections fail.
+            bind_host = '0.0.0.0' if self.host in ('0.0.0.0', '::') else self.host
             async with websockets.serve(
-                handler, self.host, self.port,
+                handler, bind_host, self.port,
                 max_size=2 ** 20,
                 ping_interval=20,
                 ping_timeout=20,
-                close_timeout=None,
+                close_timeout=10,
             ):
                 print(f"Visualizer WebSocket listening on {self.host}:{self.port} "
                       f"(budget={VIZ_MAX_LATENCY_MS:.0f}ms)")
@@ -915,12 +1237,6 @@ class AudioReceiver:
         self._last_config_hash = None
         self.breathing_detector = BreathingDetector(SAMPLE_RATE) if BREATHING_ENABLE else None
 
-        # Real-time visualization feed (Waveform + Spectrogram over WebSocket)
-        self.viz_port = viz_port
-        self.viz_feed = VisualizerFeed(host=host, port=viz_port,
-                                       analyzer=VisualizerAnalyzer(SAMPLE_RATE))
-        self._control_clients = set()
-
         # Live audio processor (filter chain for monitoring + recording)
         self.live_processor = None
         try:
@@ -929,6 +1245,21 @@ class AudioReceiver:
             print(f"[{datetime.now().isoformat()}] LiveProcessor initialized")
         except Exception as e:
             print(f"[{datetime.now().isoformat()}] LiveProcessor disabled: {e}")
+
+        # Real-time visualization feed (Waveform + Spectrogram over WebSocket)
+        self.viz_port = viz_port
+        self.viz_feed = None
+        try:
+            self.viz_feed = VisualizerFeed(
+                host=host,
+                port=viz_port,
+                analyzer=VisualizerAnalyzer(SAMPLE_RATE),
+                live_processor=self.live_processor,
+            )
+            print(f"[{datetime.now().isoformat()}] VisualizerFeed initialized")
+        except Exception as e:
+            print(f"[{datetime.now().isoformat()}] VisualizerFeed disabled: {e}")
+        self._control_clients = set()
 
         # HTTP stream buffer for /stream endpoint
         self.stream_buffer = StreamBuffer(max_seconds=2, sample_rate=SAMPLE_RATE)
@@ -944,10 +1275,15 @@ class AudioReceiver:
         # the graphs stay OFF until the whole batch completes, then restores.
         self._extract_batch_remaining = 0
         self._extract_batch_lock = threading.Lock()
+        # Segment save queue + background saver thread so FLAC encoding
+        # never blocks the real-time audio path.
+        self._segment_save_queue = queue_module.Queue(maxsize=8)
+        self._segment_saver_thread = None
         try:
             from stem_manager import StemManager
             self.stem_manager = StemManager(
-                stem_dir, max_seconds=1800, viz_feed=self.viz_feed
+                stem_dir, max_seconds=1800,
+                viz_feed=self.viz_feed if self.viz_feed is not None else None,
             )
             self.stem_extraction_enabled = True
             print(f"[stem] StemManager initialized: dir={stem_dir}")
@@ -960,6 +1296,23 @@ class AudioReceiver:
         self._recalculate_segment_bytes()
 
         # Load persisted settings at startup (fail-safe: missing/corrupt -> defaults)
+        self._startup_monitoring_enabled = True
+
+    def _advertised_host(self):
+        """Return a host browsers can use from another machine."""
+        if self.host not in ('0.0.0.0', '::', ''):
+            return self.host
+        try:
+            import socket
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                probe.connect(('8.8.8.8', 80))
+                return probe.getsockname()[0]
+            finally:
+                probe.close()
+        except Exception:
+            return 'localhost'
+
         startup_cfg = load_config(self.config_path)
         if startup_cfg:
             self.apply_config_dict(startup_cfg, persist=False)
@@ -989,6 +1342,9 @@ class AudioReceiver:
             "control_clients": ctrl,
             "viz_clients": viz,
             "monitoring_enabled": bool(getattr(self.viz_feed, '_monitoring_enabled', True)) if self.viz_feed is not None else True,
+            "filters": self.viz_feed.filter_state() if self.viz_feed is not None else {
+                'enabled': False, 'filters': [], 'params': {},
+            },
             "viz_paused": viz_paused,
             "viz_disabled": viz_disabled,
             "graph_states": graph_states,
@@ -1089,6 +1445,7 @@ class AudioReceiver:
                     if 'monitoring_enabled' in cfg:
                         try:
                             self.viz_feed.set_monitoring_enabled(bool(cfg['monitoring_enabled']))
+                            self._startup_monitoring_enabled = bool(cfg['monitoring_enabled'])
                             changed = True
                             print(f"[{datetime.now().isoformat()}] monitoring set to {bool(cfg['monitoring_enabled'])}")
                         except Exception as e:
@@ -1263,17 +1620,13 @@ class AudioReceiver:
         return float(np.sqrt(np.mean(audio ** 2)))
 
     def _process_audio(self, data):
-        """Feed PCM data into ring buffer and trigger segment saves."""
+        """Process one PCM chunk through live filters, monitor, and storage."""
         with self.lock:
-            # The live monitor MUST be the first consumer of the raw PCM so it
-            # hears the original stream before buffering, re-framing, or slicing.
-            if self.viz_feed is not None:
+            if self.live_processor is not None:
                 try:
-                    monitor = getattr(self.viz_feed, 'audio_monitor', None)
-                    if monitor is not None and getattr(self.viz_feed, '_monitoring_enabled', True):
-                        monitor.feed(data)
+                    data = self.live_processor.process(data)
                 except Exception as e:
-                    print(f"[{datetime.now().isoformat()}] monitor feed error (ignored): {e}")
+                    print(f"[{datetime.now().isoformat()}] live processor error (ignored): {e}")
 
             self.ring_buffer.extend(data)
             # Feed stream buffer for /stream endpoint
@@ -1303,11 +1656,12 @@ class AudioReceiver:
                 excess = len(self.ring_buffer) - max_buffer
                 del self.ring_buffer[:excess]
 
-            # Save segments as needed
+            # Enqueue segments for background saving so FLAC encoding
+            # never blocks the real-time audio path.
             while self.bytes_since_last_segment >= self.step_bytes:
                 if len(self.ring_buffer) >= self.segment_bytes:
                     segment_pcm = bytes(self.ring_buffer[-self.segment_bytes:])
-                    self._save_segment(segment_pcm)
+                    self._enqueue_segment_save(segment_pcm)
                     self.bytes_since_last_segment -= self.step_bytes
                 else:
                     # Not enough buffered yet (shouldn't happen in steady state)
@@ -1453,6 +1807,31 @@ class AudioReceiver:
             except Exception as e:
                 print(f"Worker error: {e}")
 
+    def _enqueue_segment_save(self, segment_pcm):
+        """Enqueue a segment PCM for background saving. Drops if queue full."""
+        try:
+            self._segment_save_queue.put_nowait(segment_pcm)
+        except queue_module.Full:
+            print(f"[{datetime.now().isoformat()}] segment save queue full — dropping segment")
+
+    def _segment_saver_loop(self):
+        """Background thread: drain segment save queue and save FLAC files."""
+        while self.running:
+            try:
+                pcm_data = self._segment_save_queue.get(timeout=0.5)
+            except queue_module.Empty:
+                continue
+            except Exception as e:
+                print(f"[{datetime.now().isoformat()}] segment saver get failed: {e}")
+                continue
+            if pcm_data is None:
+                # Poison pill — exit
+                break
+            try:
+                self._save_segment(pcm_data)
+            except Exception as e:
+                print(f"[{datetime.now().isoformat()}] segment saver error: {e}")
+
     def _handle_control_client(self, conn, addr):
         """Receive live JSON config lines on the control port and apply + persist them.
 
@@ -1553,6 +1932,25 @@ class AudioReceiver:
                 # Never let hot-reload crash the receiver.
                 print(f"[{datetime.now().isoformat()}] hot_reload failed: {e}")
 
+    def _advertised_host(self):
+        """Return a host browsers can use from another machine."""
+        if self.host not in ('0.0.0.0', '::', ''):
+            return self.host
+        try:
+            import socket
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                # This does not send traffic; it only selects the local route.
+                probe.connect(('8.8.8.8', 80))
+                return probe.getsockname()[0]
+            finally:
+                probe.close()
+        except Exception:
+            return 'localhost'
+
+    def _advertised_websocket_url(self):
+        return 'ws://{}:{}'.format(self._advertised_host(), self.viz_port)
+
     def start(self):
         self.running = True
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1561,19 +1959,31 @@ class AudioReceiver:
         self.server_socket.listen(5)
         self.server_socket.settimeout(0.5)
         print(f"Audio receiver listening on {self.host}:{self.port}")
+        print(f"Visualizer WebSocket: {self._advertised_websocket_url()}")
         print(f"Segment: {self.segment_duration_sec}s, Overlap: {self.overlap_duration_sec}s, Step: {self.step_sec}s")
         print(f"Max storage: {MAX_STORAGE_SECONDS}s (~1 hour)")
         print(f"Breathing detection: {'enabled' if self.breathing_detector else 'disabled'}")
 
+        # Start the real-time monitor from the server process. The default
+        # remains enabled even when config.json has no monitoring key.
+        if self.viz_feed is not None and self._startup_monitoring_enabled:
+            self.viz_feed.set_monitoring_enabled(True)
+
         # Real-time visualization WebSocket feed
-        try:
-            self.viz_feed.start()
-        except Exception as e:
-            print(f"[{datetime.now().isoformat()}] Could not start visualizer feed: {e}")
+        if self.viz_feed is not None:
+            try:
+                self.viz_feed.start()
+            except Exception as e:
+                print(f"[{datetime.now().isoformat()}] Could not start visualizer feed: {e}")
 
         # Live config push channel + hot reload of config.json edits
         threading.Thread(target=self._control_loop, daemon=True).start()
         threading.Thread(target=self._hot_reload_loop, daemon=True).start()
+        # Background segment saver thread
+        self._segment_saver_thread = threading.Thread(
+            target=self._segment_saver_loop, daemon=True
+        )
+        self._segment_saver_thread.start()
 
         try:
             while self.running:
@@ -1594,6 +2004,11 @@ class AudioReceiver:
             return
         self._stopped = True
         self.running = False
+        # Signal segment saver to drain and exit
+        try:
+            self._segment_save_queue.put_nowait(None)
+        except queue_module.Full:
+            pass
         for conn in list(self.clients):
             try:
                 conn.close()

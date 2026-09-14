@@ -1,0 +1,25 @@
+{
+  "name": "JamJam Studio",
+  "version": 1,
+  "description": "Full studio: stems + pitch + chords + MIDI output + optional transcription",
+  "active": false,
+  "audio": {"sample_rate": 44100, "channels": 1, "bit_depth": 16},
+  "stems": {"backend": "demucs", "max_storage_seconds": 3600},
+  "filters": {
+    "enabled": ["noise_cancellation", "compressor"],
+    "params": {
+      "noise_cancellation": {"strength": 0.5, "method": "spectral_gate"},
+      "compressor": {"threshold_db": -20, "ratio": 4, "attack_ms": 5, "release_ms": 50}
+    }
+  },
+  "analysis": {
+    "pitch": {"algorithm": "basic_pitch", "min_freq": 60, "max_freq": 4000},
+    "chords": {"profiles": "standard"},
+    "transcription": {"backend": "faster-whisper", "model_size": "base", "device": "cpu", "language": null}
+  },
+  "apis": {
+    "musify": {"enabled": false, "base_url": "", "key": "", "rate_limit_per_min": 60}
+  },
+  "midi": {"output_enabled": true, "virtual_port": "JamJam Output", "channel": 0},
+  "ui": {"theme": "srp-dark", "editor_default_tab": "editor"}
+}

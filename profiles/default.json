@@ -1,0 +1,17 @@
+{
+  "name": "Default (Local Only)",
+  "version": 1,
+  "description": "No API keys. Local processing only. FFT stems, YIN pitch, no transcription.",
+  "active": true,
+  "audio": {"sample_rate": 44100, "channels": 1, "bit_depth": 16},
+  "stems": {"backend": "frequency_band", "max_storage_seconds": 1800},
+  "filters": {"enabled": [], "params": {}},
+  "analysis": {
+    "pitch": {"algorithm": "yin", "min_freq": 60, "max_freq": 4000},
+    "chords": {"profiles": "standard"},
+    "transcription": {"backend": "none", "model_size": "base", "device": "cpu", "language": null}
+  },
+  "apis": {},
+  "midi": {"output_enabled": false},
+  "ui": {"theme": "srp-dark", "editor_default_tab": "filters"}
+}

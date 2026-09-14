@@ -1,0 +1,42 @@
+<!-- AMP Tools Panel — included in web/index.html -->
+<div class="panel" id="toolsPanel">
+  <div class="label">
+    <span>Audio Tools</span>
+    <span class="hint" id="toolsStatus">filters offline</span>
+    <span class="toolbar">
+      <button id="toolsToggleBtn" class="filter-toggle off">Enable Filters</button>
+      <button id="toolsPreviewBtn">Preview</button>
+      <button id="toolsSaveBtn">Save Processed</button>
+      <button id="toolsRefreshBtn">Refresh</button>
+    </span>
+  </div>
+  <div style="padding:10px 12px;">
+    <!-- Filter toggles -->
+    <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+      <button class="filter-btn" data-filter="noise_cancellation">Noise Cancellation</button>
+      <button class="filter-btn" data-filter="spectral_difference">Spectral Difference</button>
+      <button class="filter-btn" data-filter="voice_removal">Voice Removal</button>
+      <button class="filter-btn" data-filter="voice_isolation">Voice Isolation</button>
+      <button class="filter-btn" data-filter="ambient_removal">Ambient Removal</button>
+      <button class="filter-btn" data-filter="feature_options">Feature Extraction</button>
+    </div>
+    <!-- Filter parameter controls (dynamically populated) -->
+    <div id="toolsParams" style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;"></div>
+    <!-- Feature readouts -->
+    <div id="toolsFeatures" style="display:none; border-top:1px solid #3d2d61; padding-top:8px;">
+      <div style="font-size:12px; color:#c8c9d4; margin-bottom:6px;">Feature Readouts</div>
+      <div id="toolsFeaturesList" style="font-size:11px; color:#9aa; display:grid; grid-template-columns:repeat(3,1fr); gap:4px;"></div>
+    </div>
+    <!-- Batch processing -->
+    <div style="border-top:1px solid #3d2d61; padding-top:8px; margin-top:8px;">
+      <div style="font-size:12px; color:#c8c9d4; margin-bottom:6px;">Batch Processing</div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <select id="toolsSegmentSelect" style="flex:1; background:#1a1230; color:#f3f3f7; border:1px solid #3d2d61; border-radius:6px; padding:6px;">
+          <option value="">Select a segment...</option>
+        </select>
+        <button id="toolsBatchBtn">Process</button>
+      </div>
+      <div id="toolsBatchStatus" style="font-size:11px; color:#9aa; margin-top:4px;"></div>
+    </div>
+  </div>
+</div>

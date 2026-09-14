@@ -16,6 +16,44 @@
     --color-secondary: #7a2fff;
     --color-accent: #00d1ff;
     --color-border: #3d2d61;
+    /* Spectral gradient - 6-stop: dark navy → violet → indigo → blue-purple → green → slate */
+    --srp-spectral-0: #060119;
+    --srp-spectral-1: #2F076E;
+    --srp-spectral-2: #370150;
+    --srp-spectral-3: #5633C7;
+    --srp-spectral-4: #134E1A;
+    --srp-spectral-5: #65637E;
+  }
+
+  .spectral-bar {
+    height: 4px;
+    background: linear-gradient(90deg,
+      var(--srp-spectral-0) 0%,
+      var(--srp-spectral-1) 20%,
+      var(--srp-spectral-2) 40%,
+      var(--srp-spectral-3) 60%,
+      var(--srp-spectral-4) 80%,
+      var(--srp-spectral-5) 100%
+    );
+    width: 100%;
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+  }
+
+  .spectral-text {
+    background: linear-gradient(90deg,
+      var(--srp-spectral-0) 0%,
+      var(--srp-spectral-1) 20%,
+      var(--srp-spectral-2) 40%,
+      var(--srp-spectral-3) 60%,
+      var(--srp-spectral-4) 80%,
+      var(--srp-spectral-5) 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -107,6 +145,7 @@
 <link rel="stylesheet" href="editor.css" />
 </head>
 <body>
+<div class="spectral-bar"></div>
 <header>
   <span id="statusDot" class="status-dot"></span>
   <a class="brand" href="https://sluttyrabbit.productions" title="Slutty Rabbit Productions" target="_blank" rel="noopener">
@@ -158,6 +197,7 @@
             <option value="inferno">inferno</option>
             <option value="viridis">viridis</option>
             <option value="mono">mono (green)</option>
+            <option value="spectral">spectral</option>
           </select>
         </label>
         <label class="hint">filter
@@ -214,6 +254,13 @@
       </span>
     </div>
     <div style="padding:10px 12px;">
+      <!-- Master Volume -->
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px; padding:8px; background:#1a1230; border-radius:6px;">
+        <span style="font-size:12px; color:#c8c9d4; min-width:80px;">Master Vol</span>
+        <input type="range" id="masterVolumeSlider" min="-20" max="6" step="0.5" value="0" style="flex:1;">
+        <span id="masterVolumeVal" style="font-size:12px; color:#7a2fff; min-width:60px; text-align:right;">0.0 dB</span>
+        <button id="masterVolumeMute" style="background:#3d2d61; color:#fff; border:none; border-radius:4px; padding:4px 10px; cursor:pointer; font-size:11px;">Mute</button>
+      </div>
       <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
         <button class="filter-btn" data-filter="noise_cancellation">Noise Cancellation</button>
         <button class="filter-btn" data-filter="spectral_difference">Spectral Difference</button>
@@ -316,8 +363,8 @@
   budgetVal.textContent = 'budget ' + cfg.budgetMs.toFixed(0) + 'ms';
 
   // ── Ring buffers ──
-  const WAVE_HISTORY_DEFAULT = 600;
-  const SPEC_HISTORY_DEFAULT = 400;
+  const WAVE_HISTORY_DEFAULT = 200;
+  const SPEC_HISTORY_DEFAULT = 150;
 
   function createRingBuffer(capacity) {
     const buf = new Array(capacity);
@@ -423,7 +470,24 @@
     for (let i = 0; i < 256; i++) {
       const t = i / 255;
       let r, g, b;
-      if (name === 'mono') {
+      if (name === 'spectral') {
+        // 6-stop spectral gradient: dark navy → violet → indigo → blue-purple → green → slate
+        const stops = [
+          [6, 1, 25],     // #060119
+          [47, 7, 110],   // #2F076E
+          [55, 1, 80],    // #370150
+          [86, 51, 199],  // #5633C7
+          [19, 78, 26],   // #134E1A
+          [101, 99, 126]  // #65637E
+        ];
+        const seg = t * 5;
+        const segIdx = Math.min(4, Math.floor(seg));
+        const frac = seg - segIdx;
+        const a = stops[segIdx], b2 = stops[segIdx+1];
+        r = Math.round(a[0] + (b2[0]-a[0]) * frac);
+        g = Math.round(a[1] + (b2[1]-a[1]) * frac);
+        b = Math.round(a[2] + (b2[2]-a[2]) * frac);
+      } else if (name === 'mono') {
         r = 18 * t; g = 240 * t; b = 18 * t;
       } else if (name === 'viridis') {
         // cheap viridis approximation
@@ -525,6 +589,41 @@
         if (msg.graph_states) {
           setGraphToggle('wave', msg.graph_states.wave_active !== false && msg.graph_states.wave_manual !== false);
           setGraphToggle('spec', msg.graph_states.spec_active !== false && msg.graph_states.spec_manual !== false);
+        }
+        if (msg.volume) {
+          const gainDb = msg.volume.gain_db;
+          if (!isNaN(gainDb) && masterVolSlider) {
+            masterVolSlider.value = gainDb;
+            masterVolVal.textContent = (gainDb >= 0 ? "+" : "") + gainDb.toFixed(1) + " dB";
+          }
+        }
+        return;
+      }
+      if (msg.type === 'filter_state') {
+        if (msg.state && msg.state.active_filters) {
+          for (const filt of msg.state.active_filters) {
+            if (filt.name === 'spectral_difference' && filt.calibration) {
+              const calStatus = document.getElementById('calStatus_spectral_difference');
+              if (calStatus) {
+                const c = filt.calibration;
+                if (c.calibrated) {
+                  calStatus.textContent = "Status: Calibrated (" + c.frame_count + "/" + c.noise_frames + " frames)";
+                  calStatus.style.color = "#4dff4d";
+                } else {
+                  calStatus.textContent = "Status: Learning... (" + c.frame_count + "/" + c.noise_frames + " frames)";
+                  calStatus.style.color = "#ffaa00";
+                }
+              }
+            }
+          }
+        }
+        const toolsStatus = document.getElementById('toolsStatus');
+        if (toolsStatus && msg.state) {
+          if (msg.state.enabled && msg.state.active_filters) {
+            toolsStatus.textContent = "filters active: " + msg.state.active_filters.map(f => f.name).join(", ");
+          } else {
+            toolsStatus.textContent = "filters offline";
+          }
         }
         return;
       }
@@ -659,20 +758,39 @@
       return;
     }
 
+    // Radial gradient centered on canvas, using theme pack spectral colors
+    const cx = w / 2, cy = h / 2;
+    const radius = Math.sqrt(cx * cx + cy * cy);
+    const waveGrad = wctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+    waveGrad.addColorStop(0, '#5633C7');    /* center: blue-purple (brightest) */
+    waveGrad.addColorStop(0.3, '#370150');  /* indigo */
+    waveGrad.addColorStop(0.6, '#2F076E');  /* violet */
+    waveGrad.addColorStop(1, '#060119');    /* edge: dark navy (darkest) */
+
     const oldestVisibleIdx = oldestIdx;
     for (let f = oldestVisibleIdx; f < historyLen; f++) {
       const buf = ringItem(waveRb, f);
       if (!buf) continue;
       const framePos = f - oldestVisibleIdx;
       const x = framePos * colW;
-      wctx.strokeStyle = 'rgba(0,209,255,0.85)';
+
+      // Full wave: filled shape mirrored around center line
+      wctx.fillStyle = waveGrad;
       wctx.beginPath();
+      // Top edge (above center)
       for (let i = 0; i < n; i++) {
         const px = x + (i / n) * colW;
-        const py = h / 2 - buf[i] * (h / 2 - 4);
-        if (i === 0) wctx.moveTo(px, py); else wctx.lineTo(px, py);
+        const pyTop = h / 2 - buf[i] * (h / 2 - 4);
+        if (i === 0) wctx.moveTo(px, pyTop); else wctx.lineTo(px, pyTop);
       }
-      wctx.stroke();
+      // Bottom edge (below center, reversed)
+      for (let i = n - 1; i >= 0; i--) {
+        const px = x + (i / n) * colW;
+        const pyBot = h / 2 + buf[i] * (h / 2 - 4);
+        wctx.lineTo(px, pyBot);
+      }
+      wctx.closePath();
+      wctx.fill();
     }
     drawWaveMeter(h);
   }
@@ -1117,6 +1235,44 @@
   let toolsEnabled = false;
   let activeFilters = new Set();
   let filterParams = {};
+
+  // Master volume control
+  const masterVolSlider = document.getElementById("masterVolumeSlider");
+  const masterVolVal = document.getElementById("masterVolumeVal");
+  const masterVolMute = document.getElementById("masterVolumeMute");
+  let lastNonMuteGain = 1.0;
+
+  if (masterVolSlider) {
+    masterVolSlider.addEventListener("input", () => {
+      const db = parseFloat(masterVolSlider.value);
+      masterVolVal.textContent = (db >= 0 ? "+" : "") + db.toFixed(1) + " dB";
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({type:"volume", cmd:"set_gain_db", db: db}));
+      }
+    });
+  }
+  if (masterVolMute) {
+    masterVolMute.addEventListener("click", () => {
+      if (masterVolMute.textContent === "Mute") {
+        lastNonMuteGain = parseFloat(masterVolSlider.value);
+        masterVolSlider.value = -20;
+        masterVolVal.textContent = "-20.0 dB";
+        masterVolMute.textContent = "Unmute";
+        masterVolMute.style.background = "#7a2fff";
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({type:"volume", cmd:"mute"}));
+        }
+      } else {
+        masterVolSlider.value = lastNonMuteGain;
+        masterVolVal.textContent = (lastNonMuteGain >= 0 ? "+" : "") + lastNonMuteGain.toFixed(1) + " dB";
+        masterVolMute.textContent = "Mute";
+        masterVolMute.style.background = "#3d2d61";
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({type:"volume", cmd:"unmute"}));
+        }
+      }
+    });
+  }
   const FILTER_REGISTRY = {
     noise_cancellation: {
       strength: {type:"float", min:0, max:1, default:0.5, label:"Strength"},
@@ -1252,6 +1408,9 @@
             if (d.style.fontSize === "9px") d.textContent = "+0.0 dB";
           });
           sendFilterConfig();
+          if (ws && ws.readyState === 1) {
+            ws.send(JSON.stringify({type:"filter_cmd", cmd:"reset", filter:"equalizer"}));
+          }
         });
         eqContainer.appendChild(resetBtn);
         toolsParams.appendChild(eqContainer);
@@ -1260,7 +1419,48 @@
 
       const div = document.createElement("div");
       div.style.cssText = "border:1px solid #3d2d61; border-radius:6px; padding:6px 8px;";
-      div.innerHTML = "<div style='font-size:11px; color:#7a2fff; margin-bottom:4px;'>" + fname + "</div>";
+      const headerDiv = document.createElement("div");
+      headerDiv.style.cssText = "display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;";
+      headerDiv.innerHTML = "<span style='font-size:11px; color:#7a2fff;'>" + fname + "</span>";
+      const resetBtn = document.createElement("button");
+      resetBtn.textContent = "Reset";
+      resetBtn.style.cssText = "background:#3d2d61; color:#fff; border:none; border-radius:3px; padding:2px 8px; cursor:pointer; font-size:10px;";
+      resetBtn.addEventListener("click", () => {
+        for (const [pname, pdef] of Object.entries(params)) {
+          filterParams[fname + "." + pname] = pdef.default;
+        }
+        renderFilterParams();
+        sendFilterConfig();
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({type:"filter_cmd", cmd:"reset", filter:fname}));
+        }
+      });
+      headerDiv.appendChild(resetBtn);
+      div.appendChild(headerDiv);
+      
+      // Calibration UI for spectral difference
+      if (fname === "spectral_difference") {
+        const calDiv = document.createElement("div");
+        calDiv.style.cssText = "background:#1a1230; border-radius:4px; padding:6px; margin-bottom:6px;";
+        calDiv.innerHTML = "<div style='font-size:10px; color:#9aa; margin-bottom:4px;'>Calibration</div>";
+        const calStatus = document.createElement("div");
+        calStatus.id = "calStatus_" + fname;
+        calStatus.style.cssText = "font-size:10px; color:#7a2fff; margin-bottom:4px;";
+        calStatus.textContent = "Status: Not calibrated";
+        const calBtn = document.createElement("button");
+        calBtn.textContent = "Calibrate";
+        calBtn.style.cssText = "background:#7a2fff; color:#fff; border:none; border-radius:3px; padding:3px 10px; cursor:pointer; font-size:10px;";
+        calBtn.addEventListener("click", () => {
+          if (ws && ws.readyState === 1) {
+            ws.send(JSON.stringify({type:"filter_cmd", cmd:"calibrate", filter:"spectral_difference"}));
+            calStatus.textContent = "Status: Calibrating...";
+          }
+        });
+        calDiv.appendChild(calStatus);
+        calDiv.appendChild(calBtn);
+        div.appendChild(calDiv);
+      }
+      
       for (const [pname, pdef] of Object.entries(params)) {
         const row = document.createElement("div");
         row.className = "param-row";

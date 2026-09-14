@@ -1,0 +1,248 @@
+<!-- Editor Panel — Tabbed file editor with filters, transcription, stems, MIDI -->
+<div class="panel" id="editorPanel" style="display:none;">
+  <!-- Header Banner -->
+  <div class="editor-header">
+    <div class="editor-file-info">
+      <span class="editor-file-icon">🎵</span>
+      <span class="editor-file-name" id="editorFileName">No file loaded</span>
+      <span class="editor-file-meta" id="editorFileMeta">—</span>
+    </div>
+    <div class="editor-transport">
+      <button id="editorPlayBtn" class="transport-btn" title="Play">▶</button>
+      <button id="editorPauseBtn" class="transport-btn" title="Pause">⏸</button>
+      <button id="editorStopBtn" class="transport-btn" title="Stop">⏹</button>
+      <span class="editor-time" id="editorTime">0:00 / 0:00</span>
+    </div>
+    <div class="editor-actions">
+      <button id="editorLoadBtn" class="editor-btn">Load File</button>
+      <button id="editorSaveBtn" class="editor-btn">Save</button>
+      <button id="editorHelpBtn" class="editor-btn">?</button>
+    </div>
+  </div>
+
+  <!-- Tab Bar -->
+  <div class="editor-tabs">
+    <button class="editor-tab active" data-tab="filters">Filters</button>
+    <button class="editor-tab" data-tab="transcribe">Transcribe</button>
+    <button class="editor-tab" data-tab="stems">Stems</button>
+    <button class="editor-tab" data-tab="midi">MIDI</button>
+    <button class="editor-tab" data-tab="profile">Profile</button>
+  </div>
+
+  <!-- Tab Content: Filters -->
+  <div class="editor-tab-content active" id="tab-filters">
+    <div class="editor-section">
+      <div class="editor-section-title">Filter Chain</div>
+      <div class="filter-list" id="editorFilterList">
+        <div class="filter-item" data-filter="noise_cancellation">
+          <input type="checkbox" id="f_noise_cancellation" />
+          <label for="f_noise_cancellation">Noise Cancellation</label>
+          <div class="filter-params" id="params_noise_cancellation"></div>
+        </div>
+        <div class="filter-item" data-filter="spectral_difference">
+          <input type="checkbox" id="f_spectral_difference" />
+          <label for="f_spectral_difference">Spectral Difference</label>
+          <div class="filter-params" id="params_spectral_difference"></div>
+        </div>
+        <div class="filter-item" data-filter="voice_removal">
+          <input type="checkbox" id="f_voice_removal" />
+          <label for="f_voice_removal">Voice Removal</label>
+          <div class="filter-params" id="params_voice_removal"></div>
+        </div>
+        <div class="filter-item" data-filter="voice_isolation">
+          <input type="checkbox" id="f_voice_isolation" />
+          <label for="f_voice_isolation">Voice Isolation</label>
+          <div class="filter-params" id="params_voice_isolation"></div>
+        </div>
+        <div class="filter-item" data-filter="compressor">
+          <input type="checkbox" id="f_compressor" />
+          <label for="f_compressor">Compressor</label>
+          <div class="filter-params" id="params_compressor"></div>
+        </div>
+        <div class="filter-item" data-filter="agc">
+          <input type="checkbox" id="f_agc" />
+          <label for="f_agc">AGC</label>
+          <div class="filter-params" id="params_agc"></div>
+        </div>
+        <div class="filter-item" data-filter="deesser">
+          <input type="checkbox" id="f_deesser" />
+          <label for="f_deesser">De-Esser</label>
+          <div class="filter-params" id="params_deesser"></div>
+        </div>
+        <div class="filter-item" data-filter="wind_noise">
+          <input type="checkbox" id="f_wind_noise" />
+          <label for="f_wind_noise">Wind Removal</label>
+          <div class="filter-params" id="params_wind_noise"></div>
+        </div>
+      </div>
+      <div class="editor-apply-row">
+        <button id="editorApplyFiltersBtn" class="editor-btn primary">Apply Filters</button>
+        <button id="editorPreviewFilterBtn" class="editor-btn">Preview</button>
+        <span id="editorFilterStatus" class="editor-status"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab Content: Transcribe -->
+  <div class="editor-tab-content" id="tab-transcribe">
+    <div class="editor-section">
+      <div class="editor-section-title">Transcription</div>
+      <div class="editor-form-row">
+        <label>Model</label>
+        <select id="transcribeModel">
+          <option value="tiny">tiny (fastest)</option>
+          <option value="base" selected>base (balanced)</option>
+          <option value="small">small (better)</option>
+          <option value="medium">medium (slow)</option>
+        </select>
+      </div>
+      <div class="editor-form-row">
+        <label>Language</label>
+        <select id="transcribeLang">
+          <option value="">Auto-detect</option>
+          <option value="en">English</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="ja">Japanese</option>
+          <option value="zh">Chinese</option>
+        </select>
+      </div>
+      <div class="editor-apply-row">
+        <button id="editorTranscribeBtn" class="editor-btn primary">Transcribe</button>
+        <span id="editorTranscribeStatus" class="editor-status"></span>
+      </div>
+      <div class="editor-result-area" id="transcribeResult">
+        <div class="editor-result-empty">Transcription results will appear here...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab Content: Stems -->
+  <div class="editor-tab-content" id="tab-stems">
+    <div class="editor-section">
+      <div class="editor-section-title">Stem Separation</div>
+      <div class="editor-form-row">
+        <label>Backend</label>
+        <select id="stemBackend">
+          <option value="frequency_band">Frequency Band (instant)</option>
+          <option value="demucs">Demucs (ML, slow)</option>
+          <option value="audio_separator">audio-separator (ONNX)</option>
+        </select>
+      </div>
+      <div class="editor-apply-row">
+        <button id="editorExtractStemsBtn" class="editor-btn primary">Extract Stems</button>
+        <span id="editorStemsStatus" class="editor-status"></span>
+      </div>
+      <div class="editor-result-area" id="stemsResult">
+        <div class="editor-result-empty">Extracted stems will appear here...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab Content: MIDI -->
+  <div class="editor-tab-content" id="tab-midi">
+    <div class="editor-section">
+      <div class="editor-section-title">MIDI Output</div>
+      <div class="editor-form-row">
+        <label>Virtual Port</label>
+        <input type="text" id="midiPort" value="AMP Output" />
+      </div>
+      <div class="editor-form-row">
+        <label>Channel</label>
+        <select id="midiChannel">
+          <option value="0">1</option>
+          <option value="1">2</option>
+          <option value="2">3</option>
+          <option value="3">4</option>
+          <option value="4">5</option>
+          <option value="5">6</option>
+          <option value="6">7</option>
+          <option value="7">8</option>
+          <option value="8">9</option>
+          <option value="9">10</option>
+          <option value="10">11</option>
+          <option value="11">12</option>
+          <option value="12">13</option>
+          <option value="13">14</option>
+          <option value="14">15</option>
+          <option value="15">16</option>
+        </select>
+      </div>
+      <div class="editor-form-row">
+        <label>Source</label>
+        <select id="midiSource">
+          <option value="pitch">Pitch Detection (monophonic)</option>
+          <option value="basic_pitch">Basic Pitch (polyphonic)</option>
+          <option value="chords">Chord Recognition</option>
+        </select>
+      </div>
+      <div class="editor-apply-row">
+        <button id="editorMidiEnableBtn" class="editor-btn primary">Enable MIDI</button>
+        <button id="editorMidiTestBtn" class="editor-btn">Test Note</button>
+        <span id="editorMidiStatus" class="editor-status"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab Content: Profile -->
+  <div class="editor-tab-content" id="tab-profile">
+    <div class="editor-section">
+      <div class="editor-section-title">Active Profile</div>
+      <div class="editor-form-row">
+        <label>Profile</label>
+        <select id="profileSelect"></select>
+        <button id="profileReloadBtn" class="editor-btn">Reload</button>
+      </div>
+      <div class="editor-form-row">
+        <label>Description</label>
+        <span id="profileDescription" class="editor-static-text">—</span>
+      </div>
+      <div class="editor-apply-row">
+        <button id="profileActivateBtn" class="editor-btn primary">Activate</button>
+        <span id="profileStatus" class="editor-status"></span>
+      </div>
+      <div class="editor-result-area" id="profileDetails">
+        <pre id="profileJson" class="editor-json"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Help Overlay -->
+<div class="editor-help-overlay" id="editorHelpOverlay" style="display:none;">
+  <div class="editor-help-content">
+    <div class="editor-help-header">
+      <span>AMP Editor Help</span>
+      <button id="editorHelpClose" class="editor-btn">✕</button>
+    </div>
+    <div class="editor-help-body">
+      <h3>Getting Started</h3>
+      <p>Load a WAV or FLAC file using the <strong>Load File</strong> button in the header, or drag-and-drop onto the Stems panel above.</p>
+
+      <h3>Filters Tab</h3>
+      <p>Select filters and adjust parameters. Click <strong>Apply Filters</strong> to process the loaded file. The result is saved to <code>audio_segments/processed/</code>.</p>
+
+      <h3>Transcribe Tab</h3>
+      <p>Run speech-to-text on the loaded file. Requires <code>faster-whisper</code> or <code>whisper</code> installed. Model size trades speed for accuracy.</p>
+
+      <h3>Stems Tab</h3>
+      <p>Separate the file into instrument stems. <strong>Frequency Band</strong> is instant but approximate. <strong>Demucs</strong> is real ML separation (slow on CPU).</p>
+
+      <h3>MIDI Tab</h3>
+      <p>Configure MIDI output from pitch/chord detection. Creates a virtual MIDI port that other DAWs can connect to.</p>
+
+      <h3>Profile Tab</h3>
+      <p>Switch between processing profiles. Profiles define which APIs, models, and defaults are active. Edit JSON files in <code>profiles/</code> to customize.</p>
+
+      <h3>Keyboard Shortcuts</h3>
+      <ul>
+        <li><code>Ctrl+O</code> — Load file</li>
+        <li><code>Ctrl+S</code> — Save processed</li>
+        <li><code>Ctrl+1-5</code> — Switch tabs</li>
+        <li><code>?</code> — Toggle help</li>
+        <li><code>Space</code> — Play/Pause</li>
+      </ul>
+    </div>
+  </div>
+</div>

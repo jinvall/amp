@@ -424,8 +424,8 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_GAIN_CEILING = 1000.0f
         private const val MIN_PRE_GAIN = 1.0f
         private const val MAX_PRE_GAIN = 10.0f
-        private const val MIN_EQ_DB = -12.0
-        private const val MAX_EQ_DB = 12.0
+        private const val MIN_EQ_DB = -12.0f
+        private const val MAX_EQ_DB = 12.0f
 
         // Keep the default signal transparent while still allowing intentional
         // gain/EQ adjustments. The 50% midpoint is the neutral point.

@@ -1,0 +1,4 @@
+# ── Audio Separator — ONNX Stem Separation ──────────────────────────────────
+# Install into: audio-separator-env (Python 3.12)
+
+audio-separator>=0.28.0

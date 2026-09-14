@@ -25,4 +25,12 @@
   --space-5: 1.5rem;
 
   --shadow-1: 0 4px 14px rgba(0, 0, 0, 0.30);
+
+  /* Spectral gradient stops (dark theme) */
+  --srp-spectral-0: #060119;
+  --srp-spectral-1: #2F076E;
+  --srp-spectral-2: #370150;
+  --srp-spectral-3: #5633C7;
+  --srp-spectral-4: #134E1A;
+  --srp-spectral-5: #65637E;
 }

@@ -237,3 +237,133 @@ a:hover {
   outline: 1px dashed rgba(63, 168, 255, 0.35);
   outline-offset: 2px;
 }
+
+/* ============================================================
+   Spectral Gradient
+   6-stop gradient: dark navy → violet → indigo → blue-purple → green → slate
+   ============================================================ */
+
+/* CSS custom properties for the spectral stops */
+:root,
+[data-theme="srp-dark"] {
+  --srp-spectral-0: #060119;
+  --srp-spectral-1: #2F076E;
+  --srp-spectral-2: #370150;
+  --srp-spectral-3: #5633C7;
+  --srp-spectral-4: #134E1A;
+  --srp-spectral-5: #65637E;
+}
+
+/* Full gradient background utility */
+.srp-spectral-bg {
+  background: linear-gradient(
+    90deg,
+    var(--srp-spectral-0) 0%,
+    var(--srp-spectral-1) 20%,
+    var(--srp-spectral-2) 40%,
+    var(--srp-spectral-3) 60%,
+    var(--srp-spectral-4) 80%,
+    var(--srp-spectral-5) 100%
+  );
+}
+
+/* Gradient as a thin accent bar */
+.srp-spectral-bar {
+  height: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--srp-spectral-0) 0%,
+    var(--srp-spectral-1) 20%,
+    var(--srp-spectral-2) 40%,
+    var(--srp-spectral-3) 60%,
+    var(--srp-spectral-4) 80%,
+    var(--srp-spectral-5) 100%
+  );
+  border-radius: var(--srp-radius-sm);
+}
+
+/* Gradient as a thick banner strip */
+.srp-spectral-banner {
+  height: 8px;
+  background: linear-gradient(
+    90deg,
+    var(--srp-spectral-0) 0%,
+    var(--srp-spectral-1) 20%,
+    var(--srp-spectral-2) 40%,
+    var(--srp-spectral-3) 60%,
+    var(--srp-spectral-4) 80%,
+    var(--srp-spectral-5) 100%
+  );
+  border-radius: var(--srp-radius-md);
+}
+
+/* Gradient text (for headings) */
+.srp-spectral-text {
+  background: linear-gradient(
+    90deg,
+    var(--srp-spectral-0) 0%,
+    var(--srp-spectral-1) 20%,
+    var(--srp-spectral-2) 40%,
+    var(--srp-spectral-3) 60%,
+    var(--srp-spectral-4) 80%,
+    var(--srp-spectral-5) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* Vertical gradient variant */
+.srp-spectral-bg-vertical {
+  background: linear-gradient(
+    180deg,
+    var(--srp-spectral-0) 0%,
+    var(--srp-spectral-1) 20%,
+    var(--srp-spectral-2) 40%,
+    var(--srp-spectral-3) 60%,
+    var(--srp-spectral-4) 80%,
+    var(--srp-spectral-5) 100%
+  );
+}
+
+/* Diagonal gradient variant */
+.srp-spectral-bg-diagonal {
+  background: linear-gradient(
+    135deg,
+    var(--srp-spectral-0) 0%,
+    var(--srp-spectral-1) 20%,
+    var(--srp-spectral-2) 40%,
+    var(--srp-spectral-3) 60%,
+    var(--srp-spectral-4) 80%,
+    var(--srp-spectral-5) 100%
+  );
+}
+
+/* Radial gradient variant */
+.srp-spectral-bg-radial {
+  background: radial-gradient(
+    circle at center,
+    var(--srp-spectral-5) 0%,
+    var(--srp-spectral-4) 20%,
+    var(--srp-spectral-3) 40%,
+    var(--srp-spectral-2) 60%,
+    var(--srp-spectral-1) 80%,
+    var(--srp-spectral-0) 100%
+  );
+}
+
+/* Individual stop utilities for custom compositions */
+.spectral-stop-0 { color: var(--srp-spectral-0); }
+.spectral-stop-1 { color: var(--srp-spectral-1); }
+.spectral-stop-2 { color: var(--srp-spectral-2); }
+.spectral-stop-3 { color: var(--srp-spectral-3); }
+.spectral-stop-4 { color: var(--srp-spectral-4); }
+.spectral-stop-5 { color: var(--srp-spectral-5); }
+
+.bg-spectral-stop-0 { background-color: var(--srp-spectral-0); }
+.bg-spectral-stop-1 { background-color: var(--srp-spectral-1); }
+.bg-spectral-stop-2 { background-color: var(--srp-spectral-2); }
+.bg-spectral-stop-3 { background-color: var(--srp-spectral-3); }
+.bg-spectral-stop-4 { background-color: var(--srp-spectral-4); }
+.bg-spectral-stop-5 { background-color: var(--srp-spectral-5); }

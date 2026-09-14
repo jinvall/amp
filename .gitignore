@@ -61,3 +61,7 @@ web/index.html.broken-*
 
 # Quarantine
 quarantine/
+# Personal notes (Kilo agent internal)
+AGENT md
+KAKI.md
+logs/

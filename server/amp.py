@@ -548,18 +548,38 @@ def _register_editor_endpoints(HealthHandler):
         try:
             from server.profile_manager import get_manager
             from server.analysis_bridge import get_bridge
-            pm = get_manager()
-            bridge = get_bridge(pm)
+            import cgi as cgi_mod
             source = self._receive_upload()
             if not source:
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(b'{"error":"no file uploaded"}')
                 return
-            # Parse filters from form field
-            import cgi as cgi_mod
-            # Re-read if needed — already consumed
-            result = bridge.apply_filters(source, ['noise_cancellation'], {})
+            # Parse filters and params from form data
+            content_type = self.headers.get('Content-Type', '')
+            form = cgi_mod.FieldStorage(
+                fp=self.rfile,
+                headers=self.headers,
+                environ={'REQUEST_METHOD': 'POST', 'CONTENT_TYPE': content_type},
+            )
+            filters_raw = form.getfirst('filters', '[]')
+            params_raw = form.getfirst('params', '{}')
+            try:
+                filters = json.loads(filters_raw) if isinstance(filters_raw, str) else filters_raw
+                params = json.loads(params_raw) if isinstance(params_raw, str) else params_raw
+            except json.JSONDecodeError as e:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': f'invalid JSON: {e}'}).encode('utf-8'))
+                return
+            if not filters:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b'{"error":"no filters selected"}')
+                return
+            pm = get_manager()
+            bridge = get_bridge(pm)
+            result = bridge.apply_filters(source, filters, params)
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
